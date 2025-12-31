@@ -20,12 +20,12 @@ applyTo: "**/*.rs"
   - Prefer streaming / incremental processing over buffering entire datasets.
 - **Every Rust file must start with a header comment**
   - Include a short summary of the file purpose.
-  - Include: `Copyright (c) OptimTec. All rights reserved.`
+  - Include: `Copyright (c) YOAB. All rights reserved.`
 
 Example header:
 ```rust
 //! Summary: Linux epoll-based event loop utilities for the telemetry agent.
-//! Copyright (c) OptimTec. All rights reserved.
+//! Copyright (c) YOAB. All rights reserved.
 ````
 
 ## 3. Rust Style & Code Quality

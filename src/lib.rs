@@ -1,11 +1,12 @@
 //! Summary: thunder - A minimal, embedded, transactional key-value database engine.
-//! Copyright (c) Yoab. All rights reserved.
+//! Copyright (c) YOAB. All rights reserved.
 
 pub mod btree;
 pub mod db;
 pub mod error;
 pub mod freelist;
 pub mod meta;
+pub mod mmap;
 pub mod page;
 pub mod tx;
 
