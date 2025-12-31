@@ -457,6 +457,13 @@ impl BTree {
     pub fn iter(&self) -> BTreeIter<'_> {
         BTreeIter::new(self.root.as_deref())
     }
+
+    /// Returns an iterator over a range of key-value pairs in sorted order.
+    ///
+    /// The range is specified by start and end bounds.
+    pub fn range<'a>(&'a self, start: Bound<'a>, end: Bound<'a>) -> BTreeRangeIter<'a> {
+        BTreeRangeIter::new(self, start, end)
+    }
 }
 
 impl Default for BTree {
@@ -537,6 +544,95 @@ impl<'a> Iterator for BTreeIter<'a> {
         }
 
         Some((key.as_slice(), value.as_slice()))
+    }
+}
+
+/// Bound type for range queries.
+#[derive(Debug, Clone)]
+pub enum Bound<'a> {
+    /// No bound (unbounded).
+    Unbounded,
+    /// Inclusive bound.
+    Included(&'a [u8]),
+    /// Exclusive bound.
+    Excluded(&'a [u8]),
+}
+
+/// Iterator over a range of B+ tree key-value pairs.
+pub struct BTreeRangeIter<'a> {
+    /// The underlying full iterator.
+    inner: BTreeIter<'a>,
+    /// Start bound for filtering.
+    start_bound: Bound<'a>,
+    /// End bound for filtering.
+    end_bound: Bound<'a>,
+    /// Whether we've started yielding (past start bound).
+    started: bool,
+    /// Whether we've finished (past end bound).
+    finished: bool,
+}
+
+impl<'a> BTreeRangeIter<'a> {
+    /// Creates a new range iterator.
+    pub fn new(tree: &'a BTree, start: Bound<'a>, end: Bound<'a>) -> Self {
+        Self {
+            inner: tree.iter(),
+            start_bound: start,
+            end_bound: end,
+            started: false,
+            finished: false,
+        }
+    }
+
+    /// Checks if a key is past the start bound.
+    #[inline]
+    fn is_at_or_past_start(&self, key: &[u8]) -> bool {
+        match &self.start_bound {
+            Bound::Unbounded => true,
+            Bound::Included(start) => key >= *start,
+            Bound::Excluded(start) => key > *start,
+        }
+    }
+
+    /// Checks if a key is past the end bound.
+    #[inline]
+    fn is_past_end(&self, key: &[u8]) -> bool {
+        match &self.end_bound {
+            Bound::Unbounded => false,
+            Bound::Included(end) => key > *end,
+            Bound::Excluded(end) => key >= *end,
+        }
+    }
+}
+
+impl<'a> Iterator for BTreeRangeIter<'a> {
+    type Item = (&'a [u8], &'a [u8]);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+
+        loop {
+            let (key, value) = self.inner.next()?;
+
+            // Skip keys before start bound.
+            if !self.started {
+                if self.is_at_or_past_start(key) {
+                    self.started = true;
+                } else {
+                    continue;
+                }
+            }
+
+            // Stop at end bound.
+            if self.is_past_end(key) {
+                self.finished = true;
+                return None;
+            }
+
+            return Some((key, value));
+        }
     }
 }
 

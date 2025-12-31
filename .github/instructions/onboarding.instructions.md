@@ -12,6 +12,7 @@ src/
 ├── db.rs       // Database open/close, persistence
 ├── tx.rs       // ReadTx and WriteTx transactions
 ├── btree.rs    // In-memory B+ tree implementation
+├── bucket.rs   // Bucket namespacing for key isolation
 ├── mmap.rs     // Memory-mapped file I/O
 ├── page.rs     // Page constants and types
 ├── meta.rs     // Meta page serialization/validation
@@ -32,19 +33,37 @@ src/
 ### Transactions (`tx.rs`)
 
 - **`ReadTx`** — Immutable reference to database, reads from B+ tree
+  - `get()`, `iter()`, `range()` — Key-value access and iteration
+  - `bucket()`, `bucket_exists()`, `list_buckets()` — Bucket access
 - **`WriteTx`** — Mutable reference, uses pending tree for uncommitted changes
   - Changes staged in separate `BTree` + deletion list
   - `commit()` applies changes and persists to disk
   - Dropping without commit = automatic rollback
+  - `create_bucket()`, `delete_bucket()` — Bucket management
+  - `bucket_put()`, `bucket_get()`, `bucket_delete()` — Bucket operations
 
 ### B+ Tree (`btree.rs`)
 
 - In-memory tree with 32-key node capacity (`LEAF_MAX_KEYS`, `BRANCH_MAX_KEYS`)
-- `get()`, `insert()`, `remove()`, `iter()`
+- `get()`, `insert()`, `remove()`, `iter()`, `range()`
+- `Bound` enum — Range bounds (Unbounded, Included, Excluded)
+- `BTreeIter` — Iterator over all key-value pairs in sorted order
+- `BTreeRangeIter` — Iterator for range scans with start/end bounds
 - Automatic node splitting on overflow (page splitting)
 - Automatic rebalancing (borrow/merge) on underflow
 - Keys ordered lexicographically
 - Copy-on-write semantics via pending tree isolation
+
+### Buckets (`bucket.rs`)
+
+- Logical namespacing for key isolation (similar to bbolt/etcd)
+- `BucketRef` — Read-only view of a bucket
+- `BucketMut` — Mutable view for write transactions
+- `BucketIter` — Iterator over bucket's key-value pairs
+- `BucketRangeIter` — Range iterator scoped to a bucket
+- `MAX_BUCKET_NAME_LEN = 255` — Maximum bucket name size
+- Internal key format: `[prefix][name_len][name][user_key]`
+- Bucket metadata prefix: `0x00`, data prefix: `0x01`
 
 ### Memory Mapping (`mmap.rs`)
 
@@ -79,11 +98,12 @@ src/
 
 ### Error Handling (`error.rs`)
 
-- 14 specific error variants with context
+- 17 specific error variants with context
 - `FileOpen`, `FileSeek`, `FileRead`, `FileWrite`, `FileSync` — I/O errors with path/offset
 - `Corrupted`, `InvalidMetaPage`, `BothMetaPagesInvalid` — Data integrity errors
 - `EntryReadFailed` — Per-entry load errors
 - `TxClosed`, `TxCommitFailed` — Transaction errors
+- `BucketNotFound`, `BucketAlreadyExists`, `InvalidBucketName` — Bucket errors
 - All errors preserve source for debugging
 
 ## Storage Format
@@ -120,6 +140,6 @@ src/
 ## Running Tests
 
 ```bash
-cargo test        # Run all tests (217 total)
+cargo test        # Run all tests (291 total)
 cargo clippy      # Lint check
 ```

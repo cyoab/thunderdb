@@ -2,6 +2,7 @@
 //! Copyright (c) YOAB. All rights reserved.
 
 pub mod btree;
+pub mod bucket;
 pub mod db;
 pub mod error;
 pub mod freelist;
@@ -11,6 +12,8 @@ pub mod page;
 pub mod tx;
 
 // Re-export public API at crate root for convenience.
+pub use btree::{Bound, BTreeIter, BTreeRangeIter};
+pub use bucket::{BucketBound, BucketIter, BucketMut, BucketRangeIter, BucketRef, MAX_BUCKET_NAME_LEN};
 pub use db::Database;
 pub use error::{Error, Result};
 pub use tx::{ReadTx, WriteTx};
@@ -2405,6 +2408,1540 @@ mod tests {
         let recovered = Meta::from_bytes(&bytes).unwrap();
 
         assert_eq!(recovered.page_count, 100);
+    }
+
+    // ==================== Bucket Tests ====================
+
+    #[test]
+    fn test_bucket_create_basic() {
+        let path = test_db_path("bucket_create");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"mybucket").expect("create bucket should succeed");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            assert!(rtx.bucket_exists(b"mybucket"));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_create_already_exists() {
+        let path = test_db_path("bucket_exists_err");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"mybucket").expect("create bucket should succeed");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            let result = wtx.create_bucket(b"mybucket");
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                Error::BucketAlreadyExists { name } => {
+                    assert_eq!(name, b"mybucket".to_vec());
+                }
+                other => panic!("expected BucketAlreadyExists, got {other:?}"),
+            }
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_create_if_not_exists() {
+        let path = test_db_path("bucket_create_if_not");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            let created = wtx.create_bucket_if_not_exists(b"mybucket").unwrap();
+            assert!(created, "should report bucket was created");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            let created = wtx.create_bucket_if_not_exists(b"mybucket").unwrap();
+            assert!(!created, "should report bucket already existed");
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_invalid_name_empty() {
+        let path = test_db_path("bucket_invalid_empty");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            let result = wtx.create_bucket(b"");
+            assert!(result.is_err());
+            assert!(matches!(result.unwrap_err(), Error::InvalidBucketName { .. }));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_invalid_name_too_long() {
+        let path = test_db_path("bucket_invalid_long");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            let long_name = vec![b'x'; 256]; // 256 bytes exceeds MAX_BUCKET_NAME_LEN (255)
+            let result = wtx.create_bucket(&long_name);
+            assert!(result.is_err());
+            assert!(matches!(result.unwrap_err(), Error::InvalidBucketName { .. }));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_put_get() {
+        let path = test_db_path("bucket_put_get");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"users").unwrap();
+            wtx.bucket_put(b"users", b"alice", b"admin").unwrap();
+            wtx.bucket_put(b"users", b"bob", b"member").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket = rtx.bucket(b"users").unwrap();
+            assert_eq!(bucket.get(b"alice"), Some(&b"admin"[..]));
+            assert_eq!(bucket.get(b"bob"), Some(&b"member"[..]));
+            assert_eq!(bucket.get(b"charlie"), None);
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_put_get_pending() {
+        let path = test_db_path("bucket_pending");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"test").unwrap();
+            wtx.bucket_put(b"test", b"key", b"value").unwrap();
+
+            // Should be visible via bucket_get within same transaction.
+            let value = wtx.bucket_get(b"test", b"key").unwrap();
+            assert_eq!(value, Some(b"value".to_vec()));
+
+            wtx.commit().expect("commit should succeed");
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_delete_key() {
+        let path = test_db_path("bucket_delete_key");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"data").unwrap();
+            wtx.bucket_put(b"data", b"key1", b"value1").unwrap();
+            wtx.bucket_put(b"data", b"key2", b"value2").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.bucket_delete(b"data", b"key1").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket = rtx.bucket(b"data").unwrap();
+            assert_eq!(bucket.get(b"key1"), None);
+            assert_eq!(bucket.get(b"key2"), Some(&b"value2"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_delete_bucket() {
+        let path = test_db_path("bucket_delete_bucket");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"todelete").unwrap();
+            wtx.bucket_put(b"todelete", b"k1", b"v1").unwrap();
+            wtx.bucket_put(b"todelete", b"k2", b"v2").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.delete_bucket(b"todelete").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            assert!(!rtx.bucket_exists(b"todelete"));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_delete_nonexistent() {
+        let path = test_db_path("bucket_delete_nonexistent");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            let result = wtx.delete_bucket(b"nonexistent");
+            assert!(result.is_err());
+            assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_isolation() {
+        let path = test_db_path("bucket_isolation");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"bucket_a").unwrap();
+            wtx.create_bucket(b"bucket_b").unwrap();
+
+            // Same key in different buckets.
+            wtx.bucket_put(b"bucket_a", b"key", b"value_a").unwrap();
+            wtx.bucket_put(b"bucket_b", b"key", b"value_b").unwrap();
+
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket_a = rtx.bucket(b"bucket_a").unwrap();
+            let bucket_b = rtx.bucket(b"bucket_b").unwrap();
+
+            assert_eq!(bucket_a.get(b"key"), Some(&b"value_a"[..]));
+            assert_eq!(bucket_b.get(b"key"), Some(&b"value_b"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_list() {
+        let path = test_db_path("bucket_list");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"alpha").unwrap();
+            wtx.create_bucket(b"beta").unwrap();
+            wtx.create_bucket(b"gamma").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let buckets = rtx.list_buckets();
+            assert_eq!(buckets.len(), 3);
+            assert!(buckets.contains(&b"alpha".to_vec()));
+            assert!(buckets.contains(&b"beta".to_vec()));
+            assert!(buckets.contains(&b"gamma".to_vec()));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_iter() {
+        let path = test_db_path("bucket_iter");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"items").unwrap();
+            wtx.bucket_put(b"items", b"a", b"1").unwrap();
+            wtx.bucket_put(b"items", b"b", b"2").unwrap();
+            wtx.bucket_put(b"items", b"c", b"3").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket = rtx.bucket(b"items").unwrap();
+            let items: Vec<_> = bucket.iter().collect();
+
+            assert_eq!(items.len(), 3);
+            // Items should be in sorted order.
+            assert_eq!(items[0], (&b"a"[..], &b"1"[..]));
+            assert_eq!(items[1], (&b"b"[..], &b"2"[..]));
+            assert_eq!(items[2], (&b"c"[..], &b"3"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_persistence() {
+        let path = test_db_path("bucket_persist");
+        cleanup(&path);
+
+        // Create and populate bucket.
+        {
+            let mut db = Database::open(&path).expect("open should succeed");
+            {
+                let mut wtx = db.write_tx();
+                wtx.create_bucket(b"persist_test").unwrap();
+                wtx.bucket_put(b"persist_test", b"key1", b"val1").unwrap();
+                wtx.bucket_put(b"persist_test", b"key2", b"val2").unwrap();
+                wtx.commit().expect("commit should succeed");
+            }
+        }
+
+        // Reopen and verify.
+        {
+            let db = Database::open(&path).expect("reopen should succeed");
+            let rtx = db.read_tx();
+
+            assert!(rtx.bucket_exists(b"persist_test"));
+
+            let bucket = rtx.bucket(b"persist_test").unwrap();
+            assert_eq!(bucket.get(b"key1"), Some(&b"val1"[..]));
+            assert_eq!(bucket.get(b"key2"), Some(&b"val2"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_uncommitted_not_visible() {
+        let path = test_db_path("bucket_uncommitted");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        // Create bucket but don't commit.
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"uncommitted").unwrap();
+            wtx.bucket_put(b"uncommitted", b"key", b"value").unwrap();
+            // Drop without commit.
+        }
+
+        // Bucket should not exist.
+        {
+            let rtx = db.read_tx();
+            assert!(!rtx.bucket_exists(b"uncommitted"));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_not_found_on_operations() {
+        let path = test_db_path("bucket_not_found");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+
+            // Try operations on non-existent bucket.
+            let result = wtx.bucket_put(b"nonexistent", b"key", b"value");
+            assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
+
+            let result = wtx.bucket_get(b"nonexistent", b"key");
+            assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
+
+            let result = wtx.bucket_delete(b"nonexistent", b"key");
+            assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_binary_name() {
+        let path = test_db_path("bucket_binary_name");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let binary_name = vec![0x00, 0xFF, 0x7F, 0x80];
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(&binary_name).unwrap();
+            wtx.bucket_put(&binary_name, b"key", b"value").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            assert!(rtx.bucket_exists(&binary_name));
+            let bucket = rtx.bucket(&binary_name).unwrap();
+            assert_eq!(bucket.get(b"key"), Some(&b"value"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_many_buckets() {
+        let path = test_db_path("bucket_many");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let num_buckets = 100;
+
+        {
+            let mut wtx = db.write_tx();
+            for i in 0..num_buckets {
+                let name = format!("bucket_{i:03}");
+                wtx.create_bucket(name.as_bytes()).unwrap();
+                wtx.bucket_put(name.as_bytes(), b"key", format!("value_{i}").as_bytes())
+                    .unwrap();
+            }
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let buckets = rtx.list_buckets();
+            assert_eq!(buckets.len(), num_buckets);
+
+            for i in 0..num_buckets {
+                let name = format!("bucket_{i:03}");
+                let bucket = rtx.bucket(name.as_bytes()).unwrap();
+                assert_eq!(
+                    bucket.get(b"key"),
+                    Some(format!("value_{i}").as_bytes())
+                );
+            }
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_many_keys() {
+        let path = test_db_path("bucket_many_keys");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let num_keys = 500;
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"bigbucket").unwrap();
+            for i in 0..num_keys {
+                let key = format!("key_{i:05}");
+                let value = format!("value_{i}");
+                wtx.bucket_put(b"bigbucket", key.as_bytes(), value.as_bytes())
+                    .unwrap();
+            }
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket = rtx.bucket(b"bigbucket").unwrap();
+
+            // Verify all keys.
+            for i in 0..num_keys {
+                let key = format!("key_{i:05}");
+                let expected = format!("value_{i}");
+                assert_eq!(
+                    bucket.get(key.as_bytes()),
+                    Some(expected.as_bytes()),
+                    "key {key} mismatch"
+                );
+            }
+
+            // Verify iteration count.
+            let items: Vec<_> = bucket.iter().collect();
+            assert_eq!(items.len(), num_keys);
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_overwrite_value() {
+        let path = test_db_path("bucket_overwrite");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"test").unwrap();
+            wtx.bucket_put(b"test", b"key", b"original").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.bucket_put(b"test", b"key", b"updated").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket = rtx.bucket(b"test").unwrap();
+            assert_eq!(bucket.get(b"key"), Some(&b"updated"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_delete_then_recreate() {
+        let path = test_db_path("bucket_recreate");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        // Create bucket with data.
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"temp").unwrap();
+            wtx.bucket_put(b"temp", b"old_key", b"old_value").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        // Delete bucket.
+        {
+            let mut wtx = db.write_tx();
+            wtx.delete_bucket(b"temp").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        // Recreate with different data.
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"temp").unwrap();
+            wtx.bucket_put(b"temp", b"new_key", b"new_value").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let bucket = rtx.bucket(b"temp").unwrap();
+            // Old data should be gone.
+            assert_eq!(bucket.get(b"old_key"), None);
+            // New data should be present.
+            assert_eq!(bucket.get(b"new_key"), Some(&b"new_value"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_list_pending() {
+        let path = test_db_path("bucket_list_pending");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"committed").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"pending").unwrap();
+
+            let buckets = wtx.list_buckets();
+            assert!(buckets.contains(&b"committed".to_vec()));
+            assert!(buckets.contains(&b"pending".to_vec()));
+            // Don't commit.
+        }
+
+        // Pending bucket should not be visible.
+        {
+            let rtx = db.read_tx();
+            let buckets = rtx.list_buckets();
+            assert!(buckets.contains(&b"committed".to_vec()));
+            assert!(!buckets.contains(&b"pending".to_vec()));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_max_name_length() {
+        let path = test_db_path("bucket_max_name");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let max_name = vec![b'x'; 255]; // MAX_BUCKET_NAME_LEN
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(&max_name).unwrap();
+            wtx.bucket_put(&max_name, b"key", b"value").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            assert!(rtx.bucket_exists(&max_name));
+            let bucket = rtx.bucket(&max_name).unwrap();
+            assert_eq!(bucket.get(b"key"), Some(&b"value"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_iter_isolation() {
+        let path = test_db_path("bucket_iter_isolation");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"b1").unwrap();
+            wtx.create_bucket(b"b2").unwrap();
+            wtx.bucket_put(b"b1", b"k1", b"v1").unwrap();
+            wtx.bucket_put(b"b1", b"k2", b"v2").unwrap();
+            wtx.bucket_put(b"b2", b"k3", b"v3").unwrap();
+            wtx.bucket_put(b"b2", b"k4", b"v4").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            let b1 = rtx.bucket(b"b1").unwrap();
+            let b2 = rtx.bucket(b"b2").unwrap();
+
+            let items1: Vec<_> = b1.iter().collect();
+            let items2: Vec<_> = b2.iter().collect();
+
+            // Bucket 1 should only see its keys.
+            assert_eq!(items1.len(), 2);
+            assert!(items1.iter().any(|(k, _)| *k == b"k1"));
+            assert!(items1.iter().any(|(k, _)| *k == b"k2"));
+
+            // Bucket 2 should only see its keys.
+            assert_eq!(items2.len(), 2);
+            assert!(items2.iter().any(|(k, _)| *k == b"k3"));
+            assert!(items2.iter().any(|(k, _)| *k == b"k4"));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_with_regular_keys() {
+        let path = test_db_path("bucket_with_regular");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        // Buckets and regular keys should coexist.
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"regular_key", b"regular_value");
+            wtx.create_bucket(b"mybucket").unwrap();
+            wtx.bucket_put(b"mybucket", b"bucket_key", b"bucket_value").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            // Regular key accessible.
+            assert_eq!(rtx.get(b"regular_key"), Some(b"regular_value".to_vec()));
+            // Bucket key accessible.
+            let bucket = rtx.bucket(b"mybucket").unwrap();
+            assert_eq!(bucket.get(b"bucket_key"), Some(&b"bucket_value"[..]));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_delete_in_same_tx_as_create() {
+        let path = test_db_path("bucket_create_delete_same");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"temp").unwrap();
+            wtx.bucket_put(b"temp", b"key", b"value").unwrap();
+            wtx.delete_bucket(b"temp").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let rtx = db.read_tx();
+            assert!(!rtx.bucket_exists(b"temp"));
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_operations_after_delete_pending() {
+        let path = test_db_path("bucket_ops_after_delete");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        // Create and commit bucket.
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"test").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        // Delete and try to operate on it in same transaction.
+        {
+            let mut wtx = db.write_tx();
+            wtx.delete_bucket(b"test").unwrap();
+
+            // Operations should fail now.
+            let result = wtx.bucket_put(b"test", b"key", b"value");
+            assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
+        }
+
+        cleanup(&path);
+    }
+
+    // ==================== Iterator Tests ====================
+
+    #[test]
+    fn test_iter_empty_db() {
+        let path = test_db_path("iter_empty");
+        cleanup(&path);
+
+        let db = Database::open(&path).expect("open should succeed");
+        let rtx = db.read_tx();
+
+        let items: Vec<_> = rtx.iter().collect();
+        assert!(items.is_empty());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_single_key() {
+        let path = test_db_path("iter_single");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"key", b"value");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let items: Vec<_> = rtx.iter().collect();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, b"key");
+        assert_eq!(items[0].1, b"value");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_multiple_keys_sorted() {
+        let path = test_db_path("iter_sorted");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            // Insert in non-sorted order.
+            wtx.put(b"cherry", b"3");
+            wtx.put(b"apple", b"1");
+            wtx.put(b"banana", b"2");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let items: Vec<_> = rtx.iter().collect();
+
+        assert_eq!(items.len(), 3);
+        // Should be in sorted order.
+        assert_eq!(items[0].0, b"apple");
+        assert_eq!(items[1].0, b"banana");
+        assert_eq!(items[2].0, b"cherry");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_many_keys() {
+        let path = test_db_path("iter_many");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let count = 500;
+        {
+            let mut wtx = db.write_tx();
+            for i in 0..count {
+                let key = format!("key_{i:05}");
+                let value = format!("val_{i}");
+                wtx.put(key.as_bytes(), value.as_bytes());
+            }
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let items: Vec<_> = rtx.iter().collect();
+
+        assert_eq!(items.len(), count);
+
+        // Verify sorted order.
+        for i in 1..items.len() {
+            assert!(items[i - 1].0 < items[i].0, "keys should be sorted");
+        }
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_binary_keys() {
+        let path = test_db_path("iter_binary");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(&[0x00, 0x01], b"first");
+            wtx.put(&[0x00, 0x02], b"second");
+            wtx.put(&[0xFF, 0x00], b"last");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let items: Vec<_> = rtx.iter().collect();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, &[0x00, 0x01]);
+        assert_eq!(items[1].0, &[0x00, 0x02]);
+        assert_eq!(items[2].0, &[0xFF, 0x00]);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_after_delete() {
+        let path = test_db_path("iter_after_delete");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.delete(b"b");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let items: Vec<_> = rtx.iter().collect();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, b"a");
+        assert_eq!(items[1].0, b"c");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_persistence() {
+        let path = test_db_path("iter_persist");
+        cleanup(&path);
+
+        {
+            let mut db = Database::open(&path).expect("open should succeed");
+            let mut wtx = db.write_tx();
+            wtx.put(b"x", b"1");
+            wtx.put(b"y", b"2");
+            wtx.put(b"z", b"3");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        {
+            let db = Database::open(&path).expect("reopen should succeed");
+            let rtx = db.read_tx();
+            let items: Vec<_> = rtx.iter().collect();
+
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0].0, b"x");
+            assert_eq!(items[1].0, b"y");
+            assert_eq!(items[2].0, b"z");
+        }
+
+        cleanup(&path);
+    }
+
+    // ==================== Range Scan Tests ====================
+
+    #[test]
+    fn test_range_full() {
+        let path = test_db_path("range_full");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Full range should return all keys.
+        let items: Vec<_> = rtx.range(..).collect();
+
+        assert_eq!(items.len(), 3);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_from_inclusive() {
+        let path = test_db_path("range_from");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.put(b"d", b"4");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // From b (inclusive) to end.
+        let items: Vec<_> = rtx.range(b"b".as_slice()..).collect();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, b"b");
+        assert_eq!(items[1].0, b"c");
+        assert_eq!(items[2].0, b"d");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_to_exclusive() {
+        let path = test_db_path("range_to");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.put(b"d", b"4");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // From start to c (exclusive).
+        let items: Vec<_> = rtx.range(..b"c".as_slice()).collect();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, b"a");
+        assert_eq!(items[1].0, b"b");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_to_inclusive() {
+        let path = test_db_path("range_to_incl");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.put(b"d", b"4");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // From start to c (inclusive).
+        let items: Vec<_> = rtx.range(..=b"c".as_slice()).collect();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, b"a");
+        assert_eq!(items[1].0, b"b");
+        assert_eq!(items[2].0, b"c");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_bounded() {
+        let path = test_db_path("range_bounded");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.put(b"d", b"4");
+            wtx.put(b"e", b"5");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // From b (inclusive) to d (exclusive).
+        let items: Vec<_> = rtx.range(b"b".as_slice()..b"d".as_slice()).collect();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, b"b");
+        assert_eq!(items[1].0, b"c");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_bounded_inclusive() {
+        let path = test_db_path("range_bounded_incl");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.put(b"d", b"4");
+            wtx.put(b"e", b"5");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // From b (inclusive) to d (inclusive).
+        let items: Vec<_> = rtx.range(b"b".as_slice()..=b"d".as_slice()).collect();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, b"b");
+        assert_eq!(items[1].0, b"c");
+        assert_eq!(items[2].0, b"d");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_empty_result() {
+        let path = test_db_path("range_empty");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Range outside existing keys.
+        let items: Vec<_> = rtx.range(b"x".as_slice()..b"z".as_slice()).collect();
+
+        assert!(items.is_empty());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_no_match_in_middle() {
+        let path = test_db_path("range_gap");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"aaa", b"1");
+            wtx.put(b"zzz", b"2");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Range in gap between keys.
+        let items: Vec<_> = rtx.range(b"mmm".as_slice()..b"nnn".as_slice()).collect();
+
+        assert!(items.is_empty());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_single_key() {
+        let path = test_db_path("range_single");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Exact single key range.
+        let items: Vec<_> = rtx.range(b"b".as_slice()..=b"b".as_slice()).collect();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].0, b"b");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_prefix_scan() {
+        let path = test_db_path("range_prefix");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"user:001", b"alice");
+            wtx.put(b"user:002", b"bob");
+            wtx.put(b"user:003", b"charlie");
+            wtx.put(b"post:001", b"hello");
+            wtx.put(b"post:002", b"world");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Scan all user keys using prefix range.
+        let items: Vec<_> = rtx.range(b"user:".as_slice()..b"user;".as_slice()).collect();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, b"user:001");
+        assert_eq!(items[1].0, b"user:002");
+        assert_eq!(items[2].0, b"user:003");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_many_keys() {
+        let path = test_db_path("range_many");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            for i in 0..1000 {
+                let key = format!("key_{i:05}");
+                let value = format!("val_{i}");
+                wtx.put(key.as_bytes(), value.as_bytes());
+            }
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Range from key_00100 to key_00200 (exclusive).
+        let items: Vec<_> = rtx
+            .range(b"key_00100".as_slice()..b"key_00200".as_slice())
+            .collect();
+
+        assert_eq!(items.len(), 100);
+        assert_eq!(items[0].0, b"key_00100");
+        assert_eq!(items[99].0, b"key_00199");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_binary_bounds() {
+        let path = test_db_path("range_binary");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(&[0x00], b"zero");
+            wtx.put(&[0x10], b"sixteen");
+            wtx.put(&[0x20], b"thirty-two");
+            wtx.put(&[0x30], b"forty-eight");
+            wtx.put(&[0xFF], b"max");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let items: Vec<_> = rtx.range([0x10].as_slice()..=[0x30].as_slice()).collect();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].0, &[0x10]);
+        assert_eq!(items[1].0, &[0x20]);
+        assert_eq!(items[2].0, &[0x30]);
+
+        cleanup(&path);
+    }
+
+    // ==================== Bucket Range Scan Tests ====================
+
+    #[test]
+    fn test_bucket_range_full() {
+        let path = test_db_path("bucket_range_full");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"data").unwrap();
+            wtx.bucket_put(b"data", b"a", b"1").unwrap();
+            wtx.bucket_put(b"data", b"b", b"2").unwrap();
+            wtx.bucket_put(b"data", b"c", b"3").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let bucket = rtx.bucket(b"data").unwrap();
+        let items: Vec<_> = bucket.range(..).collect();
+
+        assert_eq!(items.len(), 3);
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_range_bounded() {
+        let path = test_db_path("bucket_range_bounded");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"items").unwrap();
+            wtx.bucket_put(b"items", b"a", b"1").unwrap();
+            wtx.bucket_put(b"items", b"b", b"2").unwrap();
+            wtx.bucket_put(b"items", b"c", b"3").unwrap();
+            wtx.bucket_put(b"items", b"d", b"4").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let bucket = rtx.bucket(b"items").unwrap();
+        let items: Vec<_> = bucket.range(b"b".as_slice()..b"d".as_slice()).collect();
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, b"b");
+        assert_eq!(items[1].0, b"c");
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_range_isolation() {
+        let path = test_db_path("bucket_range_iso");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"b1").unwrap();
+            wtx.create_bucket(b"b2").unwrap();
+            wtx.bucket_put(b"b1", b"key1", b"v1").unwrap();
+            wtx.bucket_put(b"b1", b"key2", b"v2").unwrap();
+            wtx.bucket_put(b"b2", b"key1", b"x1").unwrap();
+            wtx.bucket_put(b"b2", b"key3", b"x3").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let b1 = rtx.bucket(b"b1").unwrap();
+        let b2 = rtx.bucket(b"b2").unwrap();
+
+        let items1: Vec<_> = b1.range(..).collect();
+        let items2: Vec<_> = b2.range(..).collect();
+
+        assert_eq!(items1.len(), 2);
+        assert_eq!(items2.len(), 2);
+
+        // Verify isolation.
+        assert!(items1.iter().all(|(k, _)| *k == b"key1" || *k == b"key2"));
+        assert!(items2.iter().all(|(k, _)| *k == b"key1" || *k == b"key3"));
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_bucket_range_prefix_scan() {
+        let path = test_db_path("bucket_range_prefix");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.create_bucket(b"users").unwrap();
+            wtx.bucket_put(b"users", b"admin:alice", b"a").unwrap();
+            wtx.bucket_put(b"users", b"admin:bob", b"b").unwrap();
+            wtx.bucket_put(b"users", b"guest:charlie", b"c").unwrap();
+            wtx.bucket_put(b"users", b"guest:david", b"d").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        let bucket = rtx.bucket(b"users").unwrap();
+
+        // Scan admin users.
+        let admins: Vec<_> = bucket
+            .range(b"admin:".as_slice()..b"admin;".as_slice())
+            .collect();
+
+        assert_eq!(admins.len(), 2);
+        assert_eq!(admins[0].0, b"admin:alice");
+        assert_eq!(admins[1].0, b"admin:bob");
+
+        cleanup(&path);
+    }
+
+    // ==================== Iterator Performance Tests ====================
+
+    #[test]
+    fn test_iter_performance_sequential() {
+        let path = test_db_path("iter_perf_seq");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let count = 10_000;
+        {
+            let mut wtx = db.write_tx();
+            for i in 0..count {
+                let key = format!("k{i:08}");
+                wtx.put(key.as_bytes(), b"v");
+            }
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+
+        use std::time::Instant;
+        let start = Instant::now();
+        let items: Vec<_> = rtx.iter().collect();
+        let duration = start.elapsed();
+
+        assert_eq!(items.len(), count);
+        assert!(
+            duration.as_millis() < 500,
+            "iteration took too long: {duration:?}"
+        );
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_performance() {
+        let path = test_db_path("range_perf");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        let count = 10_000;
+        {
+            let mut wtx = db.write_tx();
+            for i in 0..count {
+                let key = format!("k{i:08}");
+                wtx.put(key.as_bytes(), b"v");
+            }
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+
+        use std::time::Instant;
+        let start = Instant::now();
+        // Range scan middle 1000 keys.
+        let items: Vec<_> = rtx
+            .range(b"k00004500".as_slice()..b"k00005500".as_slice())
+            .collect();
+        let duration = start.elapsed();
+
+        assert_eq!(items.len(), 1000);
+        assert!(
+            duration.as_millis() < 100,
+            "range scan took too long: {duration:?}"
+        );
+
+        cleanup(&path);
+    }
+
+    // ==================== Edge Cases ====================
+
+    #[test]
+    fn test_range_inverted_bounds() {
+        let path = test_db_path("range_inverted");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            wtx.put(b"a", b"1");
+            wtx.put(b"b", b"2");
+            wtx.put(b"c", b"3");
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+        // Inverted range (start > end) should return empty.
+        let items: Vec<_> = rtx.range(b"z".as_slice()..b"a".as_slice()).collect();
+
+        assert!(items.is_empty());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_range_empty_db() {
+        let path = test_db_path("range_empty_db");
+        cleanup(&path);
+
+        let db = Database::open(&path).expect("open should succeed");
+        let rtx = db.read_tx();
+
+        let items: Vec<_> = rtx.range(b"a".as_slice()..b"z".as_slice()).collect();
+        assert!(items.is_empty());
+
+        cleanup(&path);
+    }
+
+    #[test]
+    fn test_iter_with_buckets_coexist() {
+        let path = test_db_path("iter_buckets_coexist");
+        cleanup(&path);
+
+        let mut db = Database::open(&path).expect("open should succeed");
+
+        {
+            let mut wtx = db.write_tx();
+            // Regular keys.
+            wtx.put(b"global_key", b"global_val");
+            // Bucket with keys.
+            wtx.create_bucket(b"mybucket").unwrap();
+            wtx.bucket_put(b"mybucket", b"bucket_key", b"bucket_val").unwrap();
+            wtx.commit().expect("commit should succeed");
+        }
+
+        let rtx = db.read_tx();
+
+        // Top-level iter should NOT include bucket internal keys directly
+        // (they have special prefixes).
+        let items: Vec<_> = rtx.iter().collect();
+
+        // Should see global_key and bucket metadata (internal representation).
+        // The exact count depends on implementation.
+        // Key point: bucket_key should not appear as a top-level key.
+        for (k, _) in &items {
+            assert_ne!(*k, b"bucket_key", "bucket keys should not appear at top level");
+        }
+
+        cleanup(&path);
     }
 }
 

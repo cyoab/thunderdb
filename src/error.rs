@@ -82,6 +82,18 @@ pub enum Error {
     },
     /// Key not found in the database.
     KeyNotFound,
+    /// Bucket not found.
+    BucketNotFound {
+        name: Vec<u8>,
+    },
+    /// Bucket already exists.
+    BucketAlreadyExists {
+        name: Vec<u8>,
+    },
+    /// Invalid bucket name (empty or too long).
+    InvalidBucketName {
+        reason: &'static str,
+    },
     /// Database is already open.
     DatabaseAlreadyOpen,
     /// Generic I/O error (legacy, prefer specific variants).
@@ -142,6 +154,15 @@ impl fmt::Display for Error {
                 }
             }
             Error::KeyNotFound => write!(f, "key not found"),
+            Error::BucketNotFound { name } => {
+                write!(f, "bucket not found: {:?}", String::from_utf8_lossy(name))
+            }
+            Error::BucketAlreadyExists { name } => {
+                write!(f, "bucket already exists: {:?}", String::from_utf8_lossy(name))
+            }
+            Error::InvalidBucketName { reason } => {
+                write!(f, "invalid bucket name: {reason}")
+            }
             Error::DatabaseAlreadyOpen => write!(f, "database is already open"),
             Error::Io(err) => write!(f, "I/O error: {err}"),
         }
