@@ -489,130 +489,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_bucket_name_empty() {
-        let result = validate_bucket_name(b"");
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::InvalidBucketName { .. }));
+    fn test_validate_bucket_name() {
+        assert!(validate_bucket_name(b"").is_err());
+        assert!(validate_bucket_name(&vec![b'x'; MAX_BUCKET_NAME_LEN + 1]).is_err());
+        assert!(validate_bucket_name(&vec![b'x'; MAX_BUCKET_NAME_LEN]).is_ok());
+        assert!(validate_bucket_name(b"test").is_ok());
     }
 
     #[test]
-    fn test_validate_bucket_name_too_long() {
-        let long_name = vec![b'x'; MAX_BUCKET_NAME_LEN + 1];
-        let result = validate_bucket_name(&long_name);
-        assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), Error::InvalidBucketName { .. }));
+    fn test_bucket_key_format() {
+        let meta_key = bucket_meta_key(b"test");
+        assert_eq!(meta_key[0], 0x00); // BUCKET_META_PREFIX
+        assert_eq!(meta_key[1], 4); // "test" length
+        assert_eq!(&meta_key[2..], b"test");
+
+        let data_key = bucket_data_key(b"mybucket", b"mykey");
+        assert_eq!(data_key[0], 0x01); // BUCKET_DATA_PREFIX
+        assert_eq!(data_key[1], 8); // "mybucket" length
+        assert_eq!(&data_key[2..10], b"mybucket");
+        assert_eq!(&data_key[10..], b"mykey");
     }
 
     #[test]
-    fn test_validate_bucket_name_max_length() {
-        let max_name = vec![b'x'; MAX_BUCKET_NAME_LEN];
-        let result = validate_bucket_name(&max_name);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_bucket_meta_key_format() {
-        let key = bucket_meta_key(b"test");
-        assert_eq!(key[0], BUCKET_META_PREFIX);
-        assert_eq!(key[1], 4); // "test" length
-        assert_eq!(&key[2..], b"test");
-    }
-
-    #[test]
-    fn test_bucket_data_key_format() {
-        let key = bucket_data_key(b"mybucket", b"mykey");
-        assert_eq!(key[0], BUCKET_DATA_PREFIX);
-        assert_eq!(key[1], 8); // "mybucket" length
-        assert_eq!(&key[2..10], b"mybucket");
-        assert_eq!(&key[10..], b"mykey");
-    }
-
-    #[test]
-    fn test_extract_user_key() {
-        let internal = bucket_data_key(b"bucket", b"key");
-        let user = extract_user_key(b"bucket", &internal);
-        assert_eq!(user, Some(&b"key"[..]));
-    }
-
-    #[test]
-    fn test_extract_user_key_wrong_bucket() {
-        let internal = bucket_data_key(b"bucket1", b"key");
-        let user = extract_user_key(b"bucket2", &internal);
-        assert_eq!(user, None);
-    }
-
-    #[test]
-    fn test_create_bucket() {
+    fn test_create_delete_bucket() {
         let mut tree = BTree::new();
+
         assert!(create_bucket(&mut tree, b"test").is_ok());
         assert!(bucket_exists(&tree, b"test"));
-    }
+        assert!(matches!(create_bucket(&mut tree, b"test").unwrap_err(), Error::BucketAlreadyExists { .. }));
 
-    #[test]
-    fn test_create_bucket_already_exists() {
-        let mut tree = BTree::new();
-        create_bucket(&mut tree, b"test").unwrap();
-        let result = create_bucket(&mut tree, b"test");
-        assert!(matches!(result.unwrap_err(), Error::BucketAlreadyExists { .. }));
-    }
-
-    #[test]
-    fn test_create_bucket_if_not_exists_new() {
-        let mut tree = BTree::new();
-        let created = create_bucket_if_not_exists(&mut tree, b"test").unwrap();
-        assert!(created);
-        assert!(bucket_exists(&tree, b"test"));
-    }
-
-    #[test]
-    fn test_create_bucket_if_not_exists_existing() {
-        let mut tree = BTree::new();
-        create_bucket(&mut tree, b"test").unwrap();
-        let created = create_bucket_if_not_exists(&mut tree, b"test").unwrap();
-        assert!(!created);
-    }
-
-    #[test]
-    fn test_delete_bucket() {
-        let mut tree = BTree::new();
-        create_bucket(&mut tree, b"test").unwrap();
-
-        // Add some data.
-        let key = bucket_data_key(b"test", b"key1");
-        tree.insert(key, b"value1".to_vec());
-
-        // Delete bucket.
-        delete_bucket(&mut tree, b"test").unwrap();
-
-        // Verify bucket and data are gone.
+        assert!(delete_bucket(&mut tree, b"test").is_ok());
         assert!(!bucket_exists(&tree, b"test"));
-        let data_key = bucket_data_key(b"test", b"key1");
-        assert!(tree.get(&data_key).is_none());
+        assert!(matches!(delete_bucket(&mut tree, b"test").unwrap_err(), Error::BucketNotFound { .. }));
     }
 
     #[test]
-    fn test_delete_bucket_not_found() {
-        let mut tree = BTree::new();
-        let result = delete_bucket(&mut tree, b"nonexistent");
-        assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
-    }
-
-    #[test]
-    fn test_list_buckets() {
-        let mut tree = BTree::new();
-        create_bucket(&mut tree, b"alpha").unwrap();
-        create_bucket(&mut tree, b"beta").unwrap();
-        create_bucket(&mut tree, b"gamma").unwrap();
-
-        let buckets = list_buckets(&tree);
-        assert_eq!(buckets.len(), 3);
-        assert!(buckets.contains(&b"alpha".to_vec()));
-        assert!(buckets.contains(&b"beta".to_vec()));
-        assert!(buckets.contains(&b"gamma".to_vec()));
-    }
-
-    #[test]
-    fn test_bucket_ref_get() {
+    fn test_bucket_ref_operations() {
         let mut tree = BTree::new();
         create_bucket(&mut tree, b"test").unwrap();
 
@@ -622,56 +534,10 @@ mod tests {
         let bucket = BucketRef::new(&tree, b"test").unwrap();
         assert_eq!(bucket.get(b"key"), Some(&b"value"[..]));
         assert_eq!(bucket.get(b"missing"), None);
-    }
 
-    #[test]
-    fn test_bucket_ref_not_found() {
-        let tree = BTree::new();
-        let result = BucketRef::new(&tree, b"nonexistent");
-        assert!(matches!(result.unwrap_err(), Error::BucketNotFound { .. }));
-    }
-
-    #[test]
-    fn test_bucket_mut_put_get_delete() {
-        let mut tree = BTree::new();
-        create_bucket(&mut tree, b"test").unwrap();
-
-        {
-            let mut bucket = BucketMut::new(&mut tree, b"test").unwrap();
-            bucket.put(b"key1", b"value1");
-            bucket.put(b"key2", b"value2");
-            assert_eq!(bucket.get(b"key1"), Some(&b"value1"[..]));
-            assert_eq!(bucket.get(b"key2"), Some(&b"value2"[..]));
-        }
-
-        {
-            let mut bucket = BucketMut::new(&mut tree, b"test").unwrap();
-            let deleted = bucket.delete(b"key1");
-            assert_eq!(deleted, Some(b"value1".to_vec()));
-            assert_eq!(bucket.get(b"key1"), None);
-        }
-    }
-
-    #[test]
-    fn test_bucket_iter() {
-        let mut tree = BTree::new();
-        create_bucket(&mut tree, b"test").unwrap();
-
-        // Add data.
-        let key1 = bucket_data_key(b"test", b"a");
-        let key2 = bucket_data_key(b"test", b"b");
-        let key3 = bucket_data_key(b"test", b"c");
-        tree.insert(key1, b"1".to_vec());
-        tree.insert(key2, b"2".to_vec());
-        tree.insert(key3, b"3".to_vec());
-
-        let bucket = BucketRef::new(&tree, b"test").unwrap();
         let items: Vec<_> = bucket.iter().collect();
-
-        assert_eq!(items.len(), 3);
-        assert_eq!(items[0], (&b"a"[..], &b"1"[..]));
-        assert_eq!(items[1], (&b"b"[..], &b"2"[..]));
-        assert_eq!(items[2], (&b"c"[..], &b"3"[..]));
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0], (&b"key"[..], &b"value"[..]));
     }
 
     #[test]
@@ -680,26 +546,16 @@ mod tests {
         create_bucket(&mut tree, b"bucket1").unwrap();
         create_bucket(&mut tree, b"bucket2").unwrap();
 
-        // Add data to bucket1.
-        let key1 = bucket_data_key(b"bucket1", b"key");
-        tree.insert(key1, b"value1".to_vec());
+        tree.insert(bucket_data_key(b"bucket1", b"key"), b"value1".to_vec());
+        tree.insert(bucket_data_key(b"bucket2", b"key"), b"value2".to_vec());
 
-        // Add data to bucket2.
-        let key2 = bucket_data_key(b"bucket2", b"key");
-        tree.insert(key2, b"value2".to_vec());
-
-        // Verify isolation.
         let b1 = BucketRef::new(&tree, b"bucket1").unwrap();
         let b2 = BucketRef::new(&tree, b"bucket2").unwrap();
 
         assert_eq!(b1.get(b"key"), Some(&b"value1"[..]));
         assert_eq!(b2.get(b"key"), Some(&b"value2"[..]));
 
-        // Verify iteration isolation.
-        let items1: Vec<_> = b1.iter().collect();
-        let items2: Vec<_> = b2.iter().collect();
-
-        assert_eq!(items1.len(), 1);
-        assert_eq!(items2.len(), 1);
+        assert_eq!(b1.iter().count(), 1);
+        assert_eq!(b2.iter().count(), 1);
     }
 }

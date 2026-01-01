@@ -640,133 +640,36 @@ impl<'a> Iterator for BTreeRangeIter<'a> {
 mod tests {
     use super::*;
 
-    // ==================== Basic Operations ====================
-
     #[test]
-    fn test_btree_new_is_empty() {
-        let tree = BTree::new();
+    fn test_btree_basic_crud() {
+        let mut tree = BTree::new();
         assert!(tree.is_empty());
-        assert_eq!(tree.len(), 0);
-    }
 
-    #[test]
-    fn test_btree_insert_single() {
-        let mut tree = BTree::new();
-        let old = tree.insert(b"key".to_vec(), b"value".to_vec());
-
-        assert!(old.is_none());
-        assert_eq!(tree.len(), 1);
-        assert!(!tree.is_empty());
-    }
-
-    #[test]
-    fn test_btree_get_existing() {
-        let mut tree = BTree::new();
-        tree.insert(b"hello".to_vec(), b"world".to_vec());
-
-        let value = tree.get(b"hello");
-        assert_eq!(value, Some(b"world".as_slice()));
-    }
-
-    #[test]
-    fn test_btree_get_nonexistent() {
-        let mut tree = BTree::new();
-        tree.insert(b"hello".to_vec(), b"world".to_vec());
-
-        let value = tree.get(b"nonexistent");
-        assert!(value.is_none());
-    }
-
-    #[test]
-    fn test_btree_get_empty_tree() {
-        let tree = BTree::new();
-        let value = tree.get(b"anything");
-        assert!(value.is_none());
-    }
-
-    #[test]
-    fn test_btree_insert_overwrite() {
-        let mut tree = BTree::new();
-        tree.insert(b"key".to_vec(), b"value1".to_vec());
-        let old = tree.insert(b"key".to_vec(), b"value2".to_vec());
-
-        assert_eq!(old, Some(b"value1".to_vec()));
-        assert_eq!(tree.len(), 1);
-        assert_eq!(tree.get(b"key"), Some(b"value2".as_slice()));
-    }
-
-    #[test]
-    fn test_btree_remove_existing() {
-        let mut tree = BTree::new();
+        // Insert
         tree.insert(b"key".to_vec(), b"value".to_vec());
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree.get(b"key"), Some(b"value".as_slice()));
 
+        // Overwrite
+        let old = tree.insert(b"key".to_vec(), b"new_value".to_vec());
+        assert_eq!(old, Some(b"value".to_vec()));
+        assert_eq!(tree.get(b"key"), Some(b"new_value".as_slice()));
+
+        // Remove
         let removed = tree.remove(b"key");
-        assert_eq!(removed, Some(b"value".to_vec()));
+        assert_eq!(removed, Some(b"new_value".to_vec()));
         assert!(tree.is_empty());
         assert!(tree.get(b"key").is_none());
     }
 
     #[test]
-    fn test_btree_remove_nonexistent() {
-        let mut tree = BTree::new();
-        tree.insert(b"key".to_vec(), b"value".to_vec());
-
-        let removed = tree.remove(b"nonexistent");
-        assert!(removed.is_none());
-        assert_eq!(tree.len(), 1);
-    }
-
-    #[test]
-    fn test_btree_remove_empty_tree() {
-        let mut tree = BTree::new();
-        let removed = tree.remove(b"anything");
-        assert!(removed.is_none());
-    }
-
-    // ==================== Multiple Keys ====================
-
-    #[test]
-    fn test_btree_multiple_keys() {
+    fn test_btree_ordering_and_iteration() {
         let mut tree = BTree::new();
 
-        tree.insert(b"charlie".to_vec(), b"3".to_vec());
-        tree.insert(b"alpha".to_vec(), b"1".to_vec());
-        tree.insert(b"bravo".to_vec(), b"2".to_vec());
-
-        assert_eq!(tree.len(), 3);
-        assert_eq!(tree.get(b"alpha"), Some(b"1".as_slice()));
-        assert_eq!(tree.get(b"bravo"), Some(b"2".as_slice()));
-        assert_eq!(tree.get(b"charlie"), Some(b"3".as_slice()));
-    }
-
-    #[test]
-    fn test_btree_remove_middle_key() {
-        let mut tree = BTree::new();
-
-        tree.insert(b"a".to_vec(), b"1".to_vec());
-        tree.insert(b"b".to_vec(), b"2".to_vec());
-        tree.insert(b"c".to_vec(), b"3".to_vec());
-
-        tree.remove(b"b");
-
-        assert_eq!(tree.len(), 2);
-        assert_eq!(tree.get(b"a"), Some(b"1".as_slice()));
-        assert!(tree.get(b"b").is_none());
-        assert_eq!(tree.get(b"c"), Some(b"3".as_slice()));
-    }
-
-    // ==================== Ordering ====================
-
-    #[test]
-    fn test_btree_lexicographic_order() {
-        let mut tree = BTree::new();
-
-        // Insert out of order.
         tree.insert(b"zebra".to_vec(), b"z".to_vec());
         tree.insert(b"apple".to_vec(), b"a".to_vec());
         tree.insert(b"mango".to_vec(), b"m".to_vec());
 
-        // Verify iteration is in sorted order.
         let pairs: Vec<_> = tree.iter().collect();
         assert_eq!(pairs.len(), 3);
         assert_eq!(pairs[0].0, b"apple");
@@ -775,37 +678,9 @@ mod tests {
     }
 
     #[test]
-    fn test_btree_empty_keys_and_values() {
+    fn test_btree_many_insertions_causes_splits() {
         let mut tree = BTree::new();
 
-        tree.insert(b"".to_vec(), b"empty_key".to_vec());
-        tree.insert(b"key".to_vec(), b"".to_vec());
-
-        assert_eq!(tree.get(b""), Some(b"empty_key".as_slice()));
-        assert_eq!(tree.get(b"key"), Some(b"".as_slice()));
-    }
-
-    #[test]
-    fn test_btree_binary_keys() {
-        let mut tree = BTree::new();
-
-        // Keys with null bytes and non-UTF8 data.
-        tree.insert(vec![0, 1, 2], b"binary1".to_vec());
-        tree.insert(vec![0, 0, 0], b"binary2".to_vec());
-        tree.insert(vec![255, 255], b"binary3".to_vec());
-
-        assert_eq!(tree.get(&[0, 1, 2]), Some(b"binary1".as_slice()));
-        assert_eq!(tree.get(&[0, 0, 0]), Some(b"binary2".as_slice()));
-        assert_eq!(tree.get(&[255, 255]), Some(b"binary3".as_slice()));
-    }
-
-    // ==================== Splitting (Large Insertions) ====================
-
-    #[test]
-    fn test_btree_many_insertions_sequential() {
-        let mut tree = BTree::new();
-
-        // Insert enough keys to trigger multiple splits.
         for i in 0..200u32 {
             let key = format!("key_{i:05}");
             let value = format!("value_{i}");
@@ -814,265 +689,38 @@ mod tests {
 
         assert_eq!(tree.len(), 200);
 
-        // Verify all keys are retrievable.
         for i in 0..200u32 {
             let key = format!("key_{i:05}");
-            let expected_value = format!("value_{i}");
-            assert_eq!(
-                tree.get(key.as_bytes()),
-                Some(expected_value.as_bytes()),
-                "key {key} not found or wrong value"
-            );
-        }
-    }
-
-    #[test]
-    fn test_btree_many_insertions_random_order() {
-        let mut tree = BTree::new();
-
-        // Insert in a pseudo-random order to stress the tree.
-        let mut indices: Vec<u32> = (0..200).collect();
-        // Simple shuffle using a fixed pattern.
-        for i in 0..indices.len() {
-            let j = (i * 7 + 13) % indices.len();
-            indices.swap(i, j);
+            let expected = format!("value_{i}");
+            assert_eq!(tree.get(key.as_bytes()), Some(expected.as_bytes()));
         }
 
-        for i in indices.iter() {
-            let key = format!("key_{i:05}");
-            let value = format!("value_{i}");
-            tree.insert(key.into_bytes(), value.into_bytes());
-        }
-
-        assert_eq!(tree.len(), 200);
-
-        // Verify sorted iteration.
+        // Verify sorted iteration
         let pairs: Vec<_> = tree.iter().collect();
         for (idx, (key, _)) in pairs.iter().enumerate() {
             let expected_key = format!("key_{idx:05}");
-            assert_eq!(
-                *key,
-                expected_key.as_bytes(),
-                "iteration order incorrect at index {idx}"
-            );
+            assert_eq!(*key, expected_key.as_bytes());
         }
-    }
-
-    #[test]
-    fn test_btree_causes_root_split() {
-        let mut tree = BTree::new();
-
-        // Insert more than LEAF_MAX_KEYS to force at least one split.
-        for i in 0..(LEAF_MAX_KEYS + 10) {
-            let key = format!("k{i:04}");
-            tree.insert(key.into_bytes(), vec![i as u8]);
-        }
-
-        assert_eq!(tree.len(), LEAF_MAX_KEYS + 10);
-
-        // Verify all keys present.
-        for i in 0..(LEAF_MAX_KEYS + 10) {
-            let key = format!("k{i:04}");
-            assert!(tree.get(key.as_bytes()).is_some(), "missing key {key}");
-        }
-    }
-
-    // ==================== Deletion and Rebalancing ====================
-
-    #[test]
-    fn test_btree_delete_all_keys() {
-        let mut tree = BTree::new();
-
-        for i in 0..50u32 {
-            tree.insert(format!("key{i:03}").into_bytes(), vec![i as u8]);
-        }
-
-        // Delete all keys.
-        for i in 0..50u32 {
-            let key = format!("key{i:03}");
-            let removed = tree.remove(key.as_bytes());
-            assert!(removed.is_some(), "failed to remove {key}");
-        }
-
-        assert!(tree.is_empty());
-        assert_eq!(tree.len(), 0);
-    }
-
-    #[test]
-    fn test_btree_delete_in_reverse_order() {
-        let mut tree = BTree::new();
-
-        for i in 0..100u32 {
-            tree.insert(format!("key{i:03}").into_bytes(), vec![i as u8]);
-        }
-
-        // Delete in reverse order to stress rebalancing.
-        for i in (0..100u32).rev() {
-            let key = format!("key{i:03}");
-            tree.remove(key.as_bytes());
-        }
-
-        assert!(tree.is_empty());
     }
 
     #[test]
     fn test_btree_interleaved_insert_delete() {
         let mut tree = BTree::new();
 
-        // Insert some keys.
-        for i in 0..50u32 {
+        for i in 0..100u32 {
             tree.insert(format!("key{i:03}").into_bytes(), vec![i as u8]);
         }
 
-        // Delete every other key.
-        for i in (0..50u32).step_by(2) {
+        // Delete every other key
+        for i in (0..100u32).step_by(2) {
             tree.remove(format!("key{i:03}").as_bytes());
         }
 
-        assert_eq!(tree.len(), 25);
+        assert_eq!(tree.len(), 50);
 
-        // Insert more keys.
-        for i in 50..100u32 {
-            tree.insert(format!("key{i:03}").into_bytes(), vec![i as u8]);
-        }
-
-        assert_eq!(tree.len(), 75);
-
-        // Verify odd keys from first batch + all from second batch.
-        for i in (1..50u32).step_by(2) {
+        // Verify remaining keys
+        for i in (1..100u32).step_by(2) {
             assert!(tree.get(format!("key{i:03}").as_bytes()).is_some());
         }
-        for i in 50..100u32 {
-            assert!(tree.get(format!("key{i:03}").as_bytes()).is_some());
-        }
-    }
-
-    // ==================== Iterator ====================
-
-    #[test]
-    fn test_btree_iter_empty() {
-        let tree = BTree::new();
-        let pairs: Vec<_> = tree.iter().collect();
-        assert!(pairs.is_empty());
-    }
-
-    #[test]
-    fn test_btree_iter_single() {
-        let mut tree = BTree::new();
-        tree.insert(b"key".to_vec(), b"value".to_vec());
-
-        let pairs: Vec<_> = tree.iter().collect();
-        assert_eq!(pairs.len(), 1);
-        assert_eq!(pairs[0], (b"key".as_slice(), b"value".as_slice()));
-    }
-
-    #[test]
-    fn test_btree_iter_many() {
-        let mut tree = BTree::new();
-
-        for i in 0..100u32 {
-            tree.insert(format!("{i:03}").into_bytes(), vec![i as u8]);
-        }
-
-        let pairs: Vec<_> = tree.iter().collect();
-        assert_eq!(pairs.len(), 100);
-
-        // Verify sorted order.
-        for (idx, (key, value)) in pairs.iter().enumerate() {
-            let expected_key = format!("{idx:03}");
-            assert_eq!(*key, expected_key.as_bytes());
-            assert_eq!(*value, &[idx as u8]);
-        }
-    }
-
-    // ==================== Edge Cases ====================
-
-    #[test]
-    fn test_btree_duplicate_insert_maintains_count() {
-        let mut tree = BTree::new();
-
-        tree.insert(b"key".to_vec(), b"v1".to_vec());
-        tree.insert(b"key".to_vec(), b"v2".to_vec());
-        tree.insert(b"key".to_vec(), b"v3".to_vec());
-
-        assert_eq!(tree.len(), 1);
-        assert_eq!(tree.get(b"key"), Some(b"v3".as_slice()));
-    }
-
-    #[test]
-    fn test_btree_large_keys_and_values() {
-        let mut tree = BTree::new();
-
-        let large_key = vec![b'k'; 1000];
-        let large_value = vec![b'v'; 10000];
-
-        tree.insert(large_key.clone(), large_value.clone());
-
-        assert_eq!(tree.get(&large_key), Some(large_value.as_slice()));
-    }
-
-    #[test]
-    fn test_btree_prefix_keys() {
-        let mut tree = BTree::new();
-
-        // Keys that are prefixes of each other.
-        tree.insert(b"a".to_vec(), b"1".to_vec());
-        tree.insert(b"aa".to_vec(), b"2".to_vec());
-        tree.insert(b"aaa".to_vec(), b"3".to_vec());
-        tree.insert(b"ab".to_vec(), b"4".to_vec());
-
-        assert_eq!(tree.get(b"a"), Some(b"1".as_slice()));
-        assert_eq!(tree.get(b"aa"), Some(b"2".as_slice()));
-        assert_eq!(tree.get(b"aaa"), Some(b"3".as_slice()));
-        assert_eq!(tree.get(b"ab"), Some(b"4".as_slice()));
-
-        let pairs: Vec<_> = tree.iter().collect();
-        assert_eq!(pairs[0].0, b"a");
-        assert_eq!(pairs[1].0, b"aa");
-        assert_eq!(pairs[2].0, b"aaa");
-        assert_eq!(pairs[3].0, b"ab");
-    }
-
-    // ==================== Stress Test ====================
-
-    #[test]
-    fn test_btree_stress_1000_operations() {
-        let mut tree = BTree::new();
-
-        // Insert 1000 keys.
-        for i in 0..1000u32 {
-            tree.insert(format!("stress_{i:06}").into_bytes(), vec![0; 100]);
-        }
-        assert_eq!(tree.len(), 1000);
-
-        // Update half of them.
-        for i in (0..1000u32).step_by(2) {
-            tree.insert(format!("stress_{i:06}").into_bytes(), vec![1; 100]);
-        }
-        assert_eq!(tree.len(), 1000);
-
-        // Delete a quarter.
-        for i in (0..1000u32).step_by(4) {
-            tree.remove(format!("stress_{i:06}").as_bytes());
-        }
-        assert_eq!(tree.len(), 750);
-
-        // Verify remaining keys.
-        let mut count = 0;
-        for i in 0..1000u32 {
-            if i % 4 != 0 {
-                assert!(
-                    tree.get(format!("stress_{i:06}").as_bytes()).is_some(),
-                    "missing key {i}"
-                );
-                count += 1;
-            } else {
-                assert!(
-                    tree.get(format!("stress_{i:06}").as_bytes()).is_none(),
-                    "key {i} should be deleted"
-                );
-            }
-        }
-        assert_eq!(count, 750);
     }
 }

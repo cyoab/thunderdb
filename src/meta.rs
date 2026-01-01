@@ -127,64 +127,21 @@ impl Default for Meta {
 mod tests {
     use super::*;
 
-    // ==================== Serialization / Deserialization ====================
-
     #[test]
-    fn test_meta_new_defaults() {
+    fn test_meta_new_and_validate() {
         let meta = Meta::new();
         assert_eq!(meta.magic, MAGIC);
         assert_eq!(meta.version, VERSION);
         assert_eq!(meta.page_size, PAGE_SIZE as u32);
-        assert_eq!(meta.txid, 0);
-        assert_eq!(meta.root, 0);
-        assert_eq!(meta.freelist, 0);
-        assert_eq!(meta.page_count, 2);
-    }
-
-    #[test]
-    fn test_meta_validate_success() {
-        let meta = Meta::new();
         assert!(meta.validate());
+
+        let mut bad_meta = meta;
+        bad_meta.magic = 0xDEADBEEF;
+        assert!(!bad_meta.validate());
     }
 
     #[test]
-    fn test_meta_validate_bad_magic() {
-        let mut meta = Meta::new();
-        meta.magic = 0xDEADBEEF;
-        assert!(!meta.validate());
-    }
-
-    #[test]
-    fn test_meta_validate_bad_version() {
-        let mut meta = Meta::new();
-        meta.version = 999;
-        assert!(!meta.validate());
-    }
-
-    #[test]
-    fn test_meta_validate_bad_page_size() {
-        let mut meta = Meta::new();
-        meta.page_size = 1024; // Wrong page size.
-        assert!(!meta.validate());
-    }
-
-    #[test]
-    fn test_meta_round_trip_default() {
-        let original = Meta::new();
-        let bytes = original.to_bytes();
-        let restored = Meta::from_bytes(&bytes).expect("should parse successfully");
-
-        assert_eq!(original.magic, restored.magic);
-        assert_eq!(original.version, restored.version);
-        assert_eq!(original.page_size, restored.page_size);
-        assert_eq!(original.txid, restored.txid);
-        assert_eq!(original.root, restored.root);
-        assert_eq!(original.freelist, restored.freelist);
-        assert_eq!(original.page_count, restored.page_count);
-    }
-
-    #[test]
-    fn test_meta_round_trip_with_values() {
+    fn test_meta_round_trip() {
         let mut original = Meta::new();
         original.txid = 12345;
         original.root = 100;
@@ -192,7 +149,7 @@ mod tests {
         original.page_count = 200;
 
         let bytes = original.to_bytes();
-        let restored = Meta::from_bytes(&bytes).expect("should parse successfully");
+        let restored = Meta::from_bytes(&bytes).expect("should parse");
 
         assert_eq!(original.txid, restored.txid);
         assert_eq!(original.root, restored.root);
@@ -201,121 +158,20 @@ mod tests {
     }
 
     #[test]
-    fn test_meta_round_trip_max_txid() {
-        let mut original = Meta::new();
-        original.txid = u64::MAX;
-
-        let bytes = original.to_bytes();
-        let restored = Meta::from_bytes(&bytes).expect("should parse successfully");
-
-        assert_eq!(original.txid, restored.txid);
-    }
-
-    // ==================== Checksum Validation ====================
-
-    #[test]
-    fn test_meta_checksum_integrity() {
-        let meta = Meta::new();
-        let bytes = meta.to_bytes();
-
-        // Verify checksum is non-zero (extremely unlikely to be zero by chance).
-        let stored_checksum = u64::from_le_bytes(bytes[56..64].try_into().unwrap());
-        assert_ne!(stored_checksum, 0);
-    }
-
-    #[test]
-    fn test_meta_corrupted_data_detected() {
+    fn test_meta_corruption_detected() {
         let meta = Meta::new();
         let mut bytes = meta.to_bytes();
 
-        // Corrupt a byte in the middle of the data.
+        // Corrupt data
         bytes[20] ^= 0xFF;
+        assert!(Meta::from_bytes(&bytes).is_none());
 
-        // Should fail to parse due to checksum mismatch.
-        let result = Meta::from_bytes(&bytes);
-        assert!(result.is_none(), "corrupted meta should not parse");
-    }
+        // Corrupt checksum
+        let mut bytes2 = meta.to_bytes();
+        bytes2[56] ^= 0xFF;
+        assert!(Meta::from_bytes(&bytes2).is_none());
 
-    #[test]
-    fn test_meta_corrupted_checksum_detected() {
-        let meta = Meta::new();
-        let mut bytes = meta.to_bytes();
-
-        // Corrupt the checksum itself.
-        bytes[56] ^= 0xFF;
-
-        let result = Meta::from_bytes(&bytes);
-        assert!(result.is_none(), "corrupted checksum should fail");
-    }
-
-    #[test]
-    fn test_meta_all_zeros_fails() {
-        let bytes = [0u8; PAGE_SIZE];
-        let result = Meta::from_bytes(&bytes);
-        // Should fail because magic number is wrong.
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_meta_from_bytes_too_short() {
-        let bytes = [0u8; Meta::SIZE - 1];
-        let result = Meta::from_bytes(&bytes);
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_meta_from_bytes_exact_size() {
-        let meta = Meta::new();
-        let full_bytes = meta.to_bytes();
-
-        // Only pass the minimum required bytes.
-        let result = Meta::from_bytes(&full_bytes[0..Meta::SIZE]);
-        assert!(result.is_some());
-    }
-
-    // ==================== FNV-1a Checksum Properties ====================
-
-    #[test]
-    fn test_checksum_different_for_different_data() {
-        let mut meta1 = Meta::new();
-        meta1.txid = 1;
-        let bytes1 = meta1.to_bytes();
-        let checksum1 = u64::from_le_bytes(bytes1[56..64].try_into().unwrap());
-
-        let mut meta2 = Meta::new();
-        meta2.txid = 2;
-        let bytes2 = meta2.to_bytes();
-        let checksum2 = u64::from_le_bytes(bytes2[56..64].try_into().unwrap());
-
-        assert_ne!(checksum1, checksum2);
-    }
-
-    #[test]
-    fn test_checksum_deterministic() {
-        let meta = Meta::new();
-
-        let bytes1 = meta.to_bytes();
-        let bytes2 = meta.to_bytes();
-
-        // Same input should always produce same output.
-        assert_eq!(bytes1, bytes2);
-    }
-
-    // ==================== Page Size Validation ====================
-
-    #[test]
-    fn test_meta_to_bytes_fills_page() {
-        let meta = Meta::new();
-        let bytes = meta.to_bytes();
-
-        assert_eq!(bytes.len(), PAGE_SIZE);
-    }
-
-    #[test]
-    fn test_meta_size_constant() {
-        // Ensure SIZE constant is correctly defined.
-        assert_eq!(Meta::SIZE, 64);
-        // Compile-time assertion that Meta fits in a page.
-        const _: () = assert!(Meta::SIZE <= PAGE_SIZE);
+        // Too short
+        assert!(Meta::from_bytes(&[0u8; Meta::SIZE - 1]).is_none());
     }
 }

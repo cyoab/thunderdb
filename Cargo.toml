@@ -5,3 +5,7 @@ edition = "2024"
 
 [dependencies]
 libc = "0.2.178"
+
+[[bin]]
+name = "thunder_bench"
+path = "bench/thunder_bench.rs"

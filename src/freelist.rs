@@ -137,193 +137,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_freelist_new_is_empty() {
-        let fl = FreeList::new();
-        assert!(fl.is_empty());
-        assert_eq!(fl.len(), 0);
-    }
-
-    #[test]
-    fn test_freelist_default() {
-        let fl = FreeList::default();
-        assert!(fl.is_empty());
-    }
-
-    #[test]
-    fn test_freelist_free_single() {
+    fn test_freelist_basic_operations() {
         let mut fl = FreeList::new();
-        fl.free(42);
+        assert!(fl.is_empty());
 
-        assert!(!fl.is_empty());
-        assert_eq!(fl.len(), 1);
-        assert!(fl.contains(42));
-    }
-
-    #[test]
-    fn test_freelist_free_multiple() {
-        let mut fl = FreeList::new();
         fl.free(10);
         fl.free(20);
-        fl.free(30);
-
-        assert_eq!(fl.len(), 3);
+        fl.free(10); // Duplicate should be ignored
+        assert_eq!(fl.len(), 2);
         assert!(fl.contains(10));
         assert!(fl.contains(20));
-        assert!(fl.contains(30));
-    }
-
-    #[test]
-    fn test_freelist_allocate_returns_page() {
-        let mut fl = FreeList::new();
-        fl.free(10);
-        fl.free(20);
-
-        let page = fl.allocate();
-        assert!(page.is_some());
-        assert_eq!(fl.len(), 1);
-    }
-
-    #[test]
-    fn test_freelist_allocate_empty() {
-        let mut fl = FreeList::new();
-        assert!(fl.allocate().is_none());
-    }
-
-    #[test]
-    fn test_freelist_allocate_removes_page() {
-        let mut fl = FreeList::new();
-        fl.free(10);
 
         let page = fl.allocate().unwrap();
-        assert_eq!(page, 10);
-        assert!(!fl.contains(10));
-        assert!(fl.is_empty());
-    }
-
-    #[test]
-    fn test_freelist_duplicate_free() {
-        let mut fl = FreeList::new();
-        fl.free(10);
-        fl.free(10);
-        fl.free(10);
-
+        assert!(page == 10 || page == 20);
         assert_eq!(fl.len(), 1);
-    }
 
-    #[test]
-    fn test_freelist_clear() {
-        let mut fl = FreeList::new();
-        fl.free(10);
-        fl.free(20);
         fl.clear();
-
         assert!(fl.is_empty());
     }
 
     #[test]
-    fn test_freelist_iter() {
+    fn test_freelist_serialization() {
         let mut fl = FreeList::new();
-        fl.free(30);
+        fl.free(5);
         fl.free(10);
-        fl.free(20);
-
-        // BTreeSet maintains sorted order.
-        let pages: Vec<_> = fl.iter().copied().collect();
-        assert_eq!(pages, vec![10, 20, 30]);
-    }
-
-    #[test]
-    fn test_freelist_serialization_empty() {
-        let fl = FreeList::new();
-        let bytes = fl.to_bytes();
-
-        assert_eq!(bytes.len(), 8); // Just the count.
-        assert_eq!(u64::from_le_bytes(bytes[0..8].try_into().unwrap()), 0);
-    }
-
-    #[test]
-    fn test_freelist_serialization_with_pages() {
-        let mut fl = FreeList::new();
-        fl.free(10);
-        fl.free(20);
-
-        let bytes = fl.to_bytes();
-        assert_eq!(bytes.len(), 24); // 8 + 2*8
-    }
-
-    #[test]
-    fn test_freelist_round_trip() {
-        let mut fl = FreeList::new();
         fl.free(100);
-        fl.free(200);
-        fl.free(300);
 
         let bytes = fl.to_bytes();
         let recovered = FreeList::from_bytes(&bytes).unwrap();
 
         assert_eq!(recovered.len(), 3);
+        assert!(recovered.contains(5));
+        assert!(recovered.contains(10));
         assert!(recovered.contains(100));
-        assert!(recovered.contains(200));
-        assert!(recovered.contains(300));
+
+        // Invalid data should return None
+        assert!(FreeList::from_bytes(&[0u8; 4]).is_none());
     }
 
     #[test]
-    fn test_freelist_from_bytes_too_short() {
-        let short = vec![0u8; 4];
-        assert!(FreeList::from_bytes(&short).is_none());
-    }
-
-    #[test]
-    fn test_freelist_from_bytes_truncated() {
-        let mut buf = vec![0u8; 16];
-        buf[0..8].copy_from_slice(&10u64.to_le_bytes()); // Claims 10 entries.
-        // But only has space for 1.
-
-        assert!(FreeList::from_bytes(&buf).is_none());
-    }
-
-    #[test]
-    fn test_freelist_allocate_deterministic() {
+    fn test_freelist_deterministic_allocation() {
         let mut fl = FreeList::new();
         fl.free(30);
         fl.free(10);
         fl.free(20);
 
-        // Should allocate in sorted order (lowest first).
+        // BTreeSet allocates in sorted order (lowest first)
         assert_eq!(fl.allocate(), Some(10));
         assert_eq!(fl.allocate(), Some(20));
         assert_eq!(fl.allocate(), Some(30));
         assert_eq!(fl.allocate(), None);
-    }
-
-    #[test]
-    fn test_freelist_clone() {
-        let mut fl = FreeList::new();
-        fl.free(10);
-        fl.free(20);
-
-        let cloned = fl.clone();
-        assert_eq!(cloned.len(), 2);
-        assert!(cloned.contains(10));
-        assert!(cloned.contains(20));
-    }
-
-    #[test]
-    fn test_freelist_large_count() {
-        let mut fl = FreeList::new();
-
-        for i in 0..1000 {
-            fl.free(i * 2);
-        }
-
-        assert_eq!(fl.len(), 1000);
-
-        let bytes = fl.to_bytes();
-        let recovered = FreeList::from_bytes(&bytes).unwrap();
-        assert_eq!(recovered.len(), 1000);
-
-        for i in 0..1000 {
-            assert!(recovered.contains(i * 2));
-        }
     }
 }

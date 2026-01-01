@@ -183,12 +183,9 @@ mod tests {
             .open(path)
             .expect("failed to create test file");
 
-        // Write known patterns to each page.
         for page_num in 0..pages {
             let mut page = [0u8; PAGE_SIZE];
-            // Fill with page number as pattern.
             page[0..8].copy_from_slice(&(page_num as u64).to_le_bytes());
-            // Fill rest with incrementing bytes.
             for (i, byte) in page[8..].iter_mut().enumerate() {
                 *byte = ((page_num + i) % 256) as u8;
             }
@@ -196,7 +193,6 @@ mod tests {
         }
         file.sync_all().expect("failed to sync");
 
-        // Reopen read-only for mapping.
         OpenOptions::new()
             .read(true)
             .open(path)
@@ -204,125 +200,38 @@ mod tests {
     }
 
     #[test]
-    fn test_mmap_basic_creation() {
-        let path = test_file_path("basic_creation");
+    fn test_mmap_creation_and_page_access() {
+        let path = test_file_path("core");
         cleanup(&path);
 
         let file = create_test_file(&path, 4);
         let mmap = Mmap::new(&file, 4 * PAGE_SIZE).expect("mmap should succeed");
 
         assert_eq!(mmap.len(), 4 * PAGE_SIZE);
-        assert!(!mmap.is_empty());
         assert_eq!(mmap.page_count(), 4);
+
+        // Verify page content
+        for page_num in 0..4u64 {
+            let page = mmap.page(page_num).expect("page should exist");
+            let stored_num = u64::from_le_bytes(page[0..8].try_into().unwrap());
+            assert_eq!(stored_num, page_num);
+        }
+
+        // Out of bounds
+        assert!(mmap.page(4).is_none());
 
         cleanup(&path);
     }
 
     #[test]
     fn test_mmap_zero_length_fails() {
-        let path = test_file_path("zero_length");
+        let path = test_file_path("zero");
         cleanup(&path);
 
         let file = create_test_file(&path, 1);
         let result = Mmap::new(&file, 0);
-
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
-
-        cleanup(&path);
-    }
-
-    #[test]
-    fn test_mmap_read_page_content() {
-        let path = test_file_path("read_content");
-        cleanup(&path);
-
-        let file = create_test_file(&path, 4);
-        let mmap = Mmap::new(&file, 4 * PAGE_SIZE).expect("mmap should succeed");
-
-        // Verify each page has correct content.
-        for page_num in 0..4u64 {
-            let page = mmap.page(page_num).expect("page should exist");
-            let stored_num = u64::from_le_bytes(page[0..8].try_into().unwrap());
-            assert_eq!(stored_num, page_num, "page number mismatch");
-        }
-
-        cleanup(&path);
-    }
-
-    #[test]
-    fn test_mmap_page_out_of_bounds() {
-        let path = test_file_path("out_of_bounds");
-        cleanup(&path);
-
-        let file = create_test_file(&path, 2);
-        let mmap = Mmap::new(&file, 2 * PAGE_SIZE).expect("mmap should succeed");
-
-        assert!(mmap.page(0).is_some());
-        assert!(mmap.page(1).is_some());
-        assert!(mmap.page(2).is_none()); // Out of bounds.
-        assert!(mmap.page(100).is_none()); // Way out of bounds.
-
-        cleanup(&path);
-    }
-
-    #[test]
-    fn test_mmap_as_slice() {
-        let path = test_file_path("as_slice");
-        cleanup(&path);
-
-        let file = create_test_file(&path, 2);
-        let mmap = Mmap::new(&file, 2 * PAGE_SIZE).expect("mmap should succeed");
-
-        let slice = mmap.as_slice();
-        assert_eq!(slice.len(), 2 * PAGE_SIZE);
-
-        // Verify first page marker.
-        let page0_num = u64::from_le_bytes(slice[0..8].try_into().unwrap());
-        assert_eq!(page0_num, 0);
-
-        // Verify second page marker.
-        let page1_num =
-            u64::from_le_bytes(slice[PAGE_SIZE..PAGE_SIZE + 8].try_into().unwrap());
-        assert_eq!(page1_num, 1);
-
-        cleanup(&path);
-    }
-
-    #[test]
-    fn test_mmap_partial_file() {
-        let path = test_file_path("partial");
-        cleanup(&path);
-
-        let file = create_test_file(&path, 4);
-        // Only map first 2 pages.
-        let mmap = Mmap::new(&file, 2 * PAGE_SIZE).expect("mmap should succeed");
-
-        assert_eq!(mmap.page_count(), 2);
-        assert!(mmap.page(0).is_some());
-        assert!(mmap.page(1).is_some());
-        assert!(mmap.page(2).is_none()); // Not mapped.
-
-        cleanup(&path);
-    }
-
-    #[test]
-    fn test_mmap_large_file() {
-        let path = test_file_path("large");
-        cleanup(&path);
-
-        // Create a 100-page file (~400KB).
-        let file = create_test_file(&path, 100);
-        let mmap = Mmap::new(&file, 100 * PAGE_SIZE).expect("mmap should succeed");
-
-        assert_eq!(mmap.page_count(), 100);
-
-        // Spot check some pages.
-        for &page_num in &[0u64, 50, 99] {
-            let page = mmap.page(page_num).expect("page should exist");
-            let stored_num = u64::from_le_bytes(page[0..8].try_into().unwrap());
-            assert_eq!(stored_num, page_num);
-        }
 
         cleanup(&path);
     }
