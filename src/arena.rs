@@ -143,6 +143,72 @@ impl Arena {
         &mut chunk[start..end]
     }
 
+    /// Allocates `size` bytes with specified alignment.
+    ///
+    /// Useful for cache-line alignment (64 bytes) or page alignment
+    /// to avoid false sharing and improve memory access patterns.
+    ///
+    /// # Arguments
+    ///
+    /// * `size` - Number of bytes to allocate.
+    /// * `align` - Required alignment (must be power of 2).
+    ///
+    /// # Returns
+    ///
+    /// A mutable slice of `size` bytes, with the starting address
+    /// aligned to `align` bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `align` is not a power of 2.
+    ///
+    /// # Performance
+    ///
+    /// Common alignments:
+    /// - 64: Cache line (avoids false sharing)
+    /// - 4096: Page alignment (for mmap-friendly buffers)
+    /// - 32768: HPC page size (matches PAGE_SIZE)
+    #[inline]
+    pub fn alloc_aligned(&mut self, size: usize, align: usize) -> &mut [u8] {
+        assert!(align.is_power_of_two(), "alignment must be power of 2");
+
+        if size == 0 {
+            return &mut [];
+        }
+
+        // Calculate padding needed for alignment
+        // We need: (chunk_base + offset + padding) % align == 0
+        // But since we don't know chunk_base at compile time, we need to
+        // ensure allocation after getting the chunk.
+
+        // First ensure we have enough space for size + potential padding
+        let max_padding = align - 1;
+        self.ensure_capacity(size + max_padding);
+
+        let chunk = &mut self.chunks[self.current_chunk];
+        let chunk_base = chunk.as_ptr() as usize;
+        let current_addr = chunk_base + self.offset;
+
+        // Calculate padding to achieve alignment
+        let misalign = current_addr & (align - 1);
+        let padding = if misalign == 0 { 0 } else { align - misalign };
+
+        // Skip padding bytes
+        if padding > 0 {
+            self.offset += padding;
+            self.total_allocated += padding;
+        }
+
+        // Now allocate the actual data
+        let start = self.offset;
+        let end = start + size;
+
+        self.offset = end;
+        self.total_allocated += size;
+
+        &mut chunk[start..end]
+    }
+
     /// Allocates and copies data into the arena.
     ///
     /// This is a convenience method that allocates space and copies

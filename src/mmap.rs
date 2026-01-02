@@ -1,5 +1,11 @@
 //! Summary: Memory-mapped file I/O for efficient page access.
 //! Copyright (c) YOAB. All rights reserved.
+//!
+//! This module provides optimized memory mapping with support for:
+//! - Access pattern hints (`madvise` SEQUENTIAL/RANDOM)
+//! - Prefetching (`MADV_WILLNEED`)
+//! - Memory reclamation hints (`MADV_DONTNEED`)
+//! - Pre-faulting via `MAP_POPULATE`
 
 use std::fmt;
 use std::fs::File;
@@ -8,10 +14,87 @@ use std::ptr::NonNull;
 
 use crate::page::PAGE_SIZE;
 
+/// Access pattern hint for memory-mapped regions.
+///
+/// These hints inform the kernel's readahead and caching strategies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccessPattern {
+    /// Normal access pattern (kernel default behavior).
+    #[default]
+    Normal,
+    /// Sequential access - kernel will aggressively readahead.
+    /// Use for full scans, sequential iteration, compaction.
+    Sequential,
+    /// Random access - kernel will minimize readahead.
+    /// Use for point lookups, B-tree traversal.
+    Random,
+    /// Pages will be accessed only once then not needed.
+    /// Kernel may deprioritize caching.
+    WillNeedOnce,
+}
+
+/// Options for creating memory mappings.
+///
+/// Allows configuring access patterns, pre-faulting, and other
+/// kernel hints for optimal performance.
+///
+/// # Example
+///
+/// ```ignore
+/// use thunder::mmap::{MmapOptions, AccessPattern};
+///
+/// let options = MmapOptions::new()
+///     .with_access_pattern(AccessPattern::Sequential)
+///     .with_populate(true);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct MmapOptions {
+    /// Access pattern hint for madvise.
+    access_pattern: AccessPattern,
+    /// Whether to pre-fault all pages (MAP_POPULATE).
+    populate: bool,
+}
+
+impl MmapOptions {
+    /// Creates default mmap options.
+    #[inline]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the expected access pattern.
+    ///
+    /// This informs the kernel's readahead and caching behavior.
+    #[inline]
+    pub fn with_access_pattern(mut self, pattern: AccessPattern) -> Self {
+        self.access_pattern = pattern;
+        self
+    }
+
+    /// Enables pre-faulting of pages via MAP_POPULATE.
+    ///
+    /// When enabled, the kernel will read all pages into memory
+    /// during the mmap call, eliminating later page faults.
+    /// Useful for small databases that fit in memory.
+    #[inline]
+    pub fn with_populate(mut self, populate: bool) -> Self {
+        self.populate = populate;
+        self
+    }
+}
+
 /// A memory-mapped region of a database file.
 ///
 /// Provides read-only access to pages via memory mapping, avoiding
 /// explicit read syscalls for page access.
+///
+/// # Optimizations
+///
+/// The mapping supports several kernel hints for performance:
+/// - **Access patterns**: Sequential/Random hints via `madvise`
+/// - **Prefetching**: `prefetch()` method for warming pages
+/// - **Memory release**: `dontneed()` to hint page eviction
+/// - **Pre-faulting**: `MAP_POPULATE` to eliminate page faults
 ///
 /// # Safety
 ///
@@ -56,6 +139,21 @@ impl Mmap {
     /// The file must not be truncated or modified in ways that invalidate
     /// the mapped pages while this mapping exists.
     pub fn new(file: &File, len: usize) -> io::Result<Self> {
+        Self::with_options(file, len, MmapOptions::default())
+    }
+
+    /// Creates a new memory mapping with custom options.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - The file to map (must be open for reading).
+    /// * `len` - The length in bytes to map (must be > 0).
+    /// * `options` - Configuration for access patterns and pre-faulting.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the mapping fails.
+    pub fn with_options(file: &File, len: usize, options: MmapOptions) -> io::Result<Self> {
         if len == 0 {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
@@ -63,21 +161,27 @@ impl Mmap {
             ));
         }
 
-        // SAFETY: We are calling mmap with valid parameters.
-        // - PROT_READ: read-only access
-        // - MAP_SHARED: changes to file are visible (though we don't write)
-        // - fd from file handle is valid
-        // - offset 0, len is the size we want
         #[cfg(unix)]
         {
             use std::os::unix::io::AsRawFd;
 
+            // Build mmap flags
+            let mut flags = libc::MAP_SHARED;
+            if options.populate {
+                flags |= libc::MAP_POPULATE;
+            }
+
+            // SAFETY: We are calling mmap with valid parameters.
+            // - PROT_READ: read-only access
+            // - MAP_SHARED: changes to file are visible (though we don't write)
+            // - fd from file handle is valid
+            // - offset 0, len is the size we want
             let ptr = unsafe {
                 libc::mmap(
                     std::ptr::null_mut(),
                     len,
                     libc::PROT_READ,
-                    libc::MAP_SHARED,
+                    flags,
                     file.as_raw_fd(),
                     0,
                 )
@@ -90,16 +194,161 @@ impl Mmap {
             // SAFETY: mmap succeeded, so ptr is valid and non-null.
             let ptr = unsafe { NonNull::new_unchecked(ptr as *mut u8) };
 
-            Ok(Self { ptr, len })
+            let mmap = Self { ptr, len };
+
+            // Apply access pattern hint via madvise
+            mmap.apply_access_hint(options.access_pattern);
+
+            Ok(mmap)
         }
 
         #[cfg(not(unix))]
         {
             let _ = file;
+            let _ = options;
             Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "memory mapping not supported on this platform",
             ))
+        }
+    }
+
+    /// Applies an access pattern hint to the entire mapping.
+    ///
+    /// # Arguments
+    ///
+    /// * `pattern` - The expected access pattern.
+    #[cfg(unix)]
+    fn apply_access_hint(&self, pattern: AccessPattern) {
+        let advice = match pattern {
+            AccessPattern::Normal => libc::MADV_NORMAL,
+            AccessPattern::Sequential => libc::MADV_SEQUENTIAL,
+            AccessPattern::Random => libc::MADV_RANDOM,
+            AccessPattern::WillNeedOnce => libc::MADV_SEQUENTIAL, // Best approximation
+        };
+
+        // SAFETY: ptr and len are valid from successful mmap.
+        // madvise is advisory and failure is non-fatal.
+        unsafe {
+            libc::madvise(self.ptr.as_ptr() as *mut libc::c_void, self.len, advice);
+        }
+    }
+
+    /// Hints to the kernel that specified pages will be needed soon.
+    ///
+    /// This triggers asynchronous readahead for the specified range,
+    /// reducing latency when the pages are actually accessed.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - Byte offset into the mapped region.
+    /// * `len` - Number of bytes to prefetch.
+    ///
+    /// # Performance
+    ///
+    /// - Call before sequential scans to warm the page cache
+    /// - Effective for ranges 64KB to 4MB
+    /// - No-op if range is invalid or on non-Unix
+    #[inline]
+    pub fn prefetch(&self, offset: usize, len: usize) {
+        #[cfg(unix)]
+        {
+            if offset >= self.len {
+                return;
+            }
+            let actual_len = len.min(self.len - offset);
+            if actual_len == 0 {
+                return;
+            }
+
+            // SAFETY: We bounds-check offset and len above.
+            // madvise WILLNEED is advisory and non-fatal on failure.
+            unsafe {
+                let addr = self.ptr.as_ptr().add(offset) as *mut libc::c_void;
+                libc::madvise(addr, actual_len, libc::MADV_WILLNEED);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (offset, len);
+        }
+    }
+
+    /// Hints to the kernel that specified pages are no longer needed.
+    ///
+    /// This allows the kernel to free physical pages backing this range.
+    /// The pages will be re-read from the file if accessed again.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - Byte offset into the mapped region.
+    /// * `len` - Number of bytes to mark as unneeded.
+    ///
+    /// # Use Cases
+    ///
+    /// - After completing a large sequential scan
+    /// - When memory pressure is high
+    /// - Before process fork to reduce copy-on-write overhead
+    #[inline]
+    pub fn dontneed(&self, offset: usize, len: usize) {
+        #[cfg(unix)]
+        {
+            if offset >= self.len {
+                return;
+            }
+            let actual_len = len.min(self.len - offset);
+            if actual_len == 0 {
+                return;
+            }
+
+            // SAFETY: We bounds-check offset and len above.
+            // madvise DONTNEED is advisory and non-fatal on failure.
+            unsafe {
+                let addr = self.ptr.as_ptr().add(offset) as *mut libc::c_void;
+                libc::madvise(addr, actual_len, libc::MADV_DONTNEED);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (offset, len);
+        }
+    }
+
+    /// Changes the access pattern hint for a region.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - Byte offset into the mapped region.
+    /// * `len` - Length of the region to hint.
+    /// * `pattern` - The expected access pattern for this region.
+    #[inline]
+    pub fn advise_region(&self, offset: usize, len: usize, pattern: AccessPattern) {
+        #[cfg(unix)]
+        {
+            if offset >= self.len {
+                return;
+            }
+            let actual_len = len.min(self.len - offset);
+            if actual_len == 0 {
+                return;
+            }
+
+            let advice = match pattern {
+                AccessPattern::Normal => libc::MADV_NORMAL,
+                AccessPattern::Sequential => libc::MADV_SEQUENTIAL,
+                AccessPattern::Random => libc::MADV_RANDOM,
+                AccessPattern::WillNeedOnce => libc::MADV_SEQUENTIAL,
+            };
+
+            // SAFETY: We bounds-check offset and len above.
+            unsafe {
+                let addr = self.ptr.as_ptr().add(offset) as *mut libc::c_void;
+                libc::madvise(addr, actual_len, advice);
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (offset, len, pattern);
         }
     }
 

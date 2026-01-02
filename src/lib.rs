@@ -38,6 +38,7 @@ pub use db::{Database, DatabaseOptions};
 pub use error::{Error, Result};
 pub use group_commit::{GroupCommitConfig, GroupCommitManager};
 pub use io_backend::{IoBackend, ReadOp, ReadResult, SyncBackend, WriteOp};
+pub use mmap::{AccessPattern, Mmap, MmapOptions};
 pub use node_pool::{NodePool, PooledLeafNode, PooledBranchNode, PoolStats, DEFAULT_MAX_POOLED};
 pub use overflow::{OverflowRef, DEFAULT_OVERFLOW_THRESHOLD};
 pub use page::PageSizeConfig;
