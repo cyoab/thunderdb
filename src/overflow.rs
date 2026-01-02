@@ -18,9 +18,9 @@ use crate::page::PageId;
 /// Default threshold for storing values in overflow pages.
 /// Values larger than this are stored in overflow chains.
 /// 
-/// Set to 16KB by default - most "large" values (10KB-16KB) will be stored
-/// inline, avoiding overflow page chain overhead. Only truly large values
-/// (>16KB) use overflow storage.
+/// Set to 16KB by default - optimized for 32KB HPC page size.
+/// Most "large" values will be stored inline, avoiding overflow
+/// page chain overhead. Only truly large values use overflow storage.
 pub const DEFAULT_OVERFLOW_THRESHOLD: usize = 16 * 1024; // 16KB
 
 /// Overflow page header size in bytes.
@@ -931,15 +931,15 @@ mod tests {
 
     #[test]
     fn test_overflow_manager_allocation() {
-        let mut mgr = OverflowManager::new(4096, 10);
+        let mut mgr = OverflowManager::new(32768, 10);
 
-        // Allocate space for a 10KB value (3 pages needed)
-        let value = vec![0xABu8; 10 * 1024];
+        // Allocate space for a 80KB value (3 pages needed with 32KB page size)
+        let value = vec![0xABu8; 80 * 1024];
         let (oref, pages) = mgr.allocate_overflow(&value);
 
-        assert_eq!(oref.total_len, 10 * 1024);
+        assert_eq!(oref.total_len, 80 * 1024);
         assert_eq!(oref.start_page, 10);
-        assert_eq!(pages.len(), 3); // 10KB needs 3 pages with 4KB page size
+        assert_eq!(pages.len(), 3); // 80KB needs 3 pages with 32KB page size
 
         // Verify chain linkage
         let header0 = OverflowHeader::from_bytes(&pages[0].1).unwrap();
@@ -975,32 +975,32 @@ mod tests {
 
     #[test]
     fn test_overflow_contiguous_allocation() {
-        let mut mgr = OverflowManager::new(4096, 10);
+        let mut mgr = OverflowManager::new(32768, 10);
 
-        // Allocate space for a 10KB value (3 pages needed)
-        let value = vec![0xABu8; 10 * 1024];
+        // Allocate space for a 80KB value (3 pages needed with 32KB page size)
+        let value = vec![0xABu8; 80 * 1024];
         let (oref, buffer) = mgr.allocate_overflow_contiguous(&value);
 
-        assert_eq!(oref.total_len, 10 * 1024);
+        assert_eq!(oref.total_len, 80 * 1024);
         assert_eq!(oref.start_page, 10);
         // Buffer should contain all 3 pages contiguously
-        assert_eq!(buffer.len(), 3 * 4096);
+        assert_eq!(buffer.len(), 3 * 32768);
 
         // Verify chain linkage in contiguous buffer
         let header0 = OverflowHeader::from_bytes(&buffer[0..]).unwrap();
-        let header1 = OverflowHeader::from_bytes(&buffer[4096..]).unwrap();
-        let header2 = OverflowHeader::from_bytes(&buffer[8192..]).unwrap();
+        let header1 = OverflowHeader::from_bytes(&buffer[32768..]).unwrap();
+        let header2 = OverflowHeader::from_bytes(&buffer[65536..]).unwrap();
 
         assert_eq!(header0.next_page, 11); // start_page + 1
         assert_eq!(header1.next_page, 12); // start_page + 2
         assert_eq!(header2.next_page, 0); // End of chain
 
         // Verify data integrity
-        let data_size = 4096 - OVERFLOW_HEADER_SIZE;
+        let data_size = 32768 - OVERFLOW_HEADER_SIZE;
         assert_eq!(header0.data_len as usize, data_size);
         assert_eq!(header1.data_len as usize, data_size);
-        // Last page has remaining data: 10*1024 - 2*data_size
-        let expected_last = 10 * 1024 - 2 * data_size;
+        // Last page has remaining data: 80*1024 - 2*data_size
+        let expected_last = 80 * 1024 - 2 * data_size;
         assert_eq!(header2.data_len as usize, expected_last);
 
         // Next allocation should start after contiguous pages
@@ -1009,7 +1009,7 @@ mod tests {
 
     #[test]
     fn test_overflow_contiguous_empty_value() {
-        let mut mgr = OverflowManager::new(4096, 10);
+        let mut mgr = OverflowManager::new(32768, 10);
 
         let (oref, buffer) = mgr.allocate_overflow_contiguous(&[]);
 
@@ -1022,8 +1022,8 @@ mod tests {
 
     #[test]
     fn test_overflow_contiguous_single_page() {
-        let mut mgr = OverflowManager::new(4096, 10);
-        let data_size = 4096 - OVERFLOW_HEADER_SIZE;
+        let mut mgr = OverflowManager::new(32768, 10);
+        let data_size = 32768 - OVERFLOW_HEADER_SIZE;
 
         // Value that fits exactly in one page
         let value = vec![0xCDu8; data_size];
@@ -1031,7 +1031,7 @@ mod tests {
 
         assert_eq!(oref.start_page, 10);
         assert_eq!(oref.total_len as usize, data_size);
-        assert_eq!(buffer.len(), 4096);
+        assert_eq!(buffer.len(), 32768);
 
         let header = OverflowHeader::from_bytes(&buffer).unwrap();
         assert_eq!(header.next_page, 0); // Single page, no chain

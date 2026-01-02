@@ -269,21 +269,21 @@ mod tests {
         let path = test_file_path("page_size");
         cleanup(&path);
 
-        let file = create_test_file(&path, 4); // 4 * 4KB = 16KB
+        let file = create_test_file(&path, 4); // 4 * 32KB = 128KB
         let mmap = Mmap::new(&file, 4 * PAGE_SIZE).expect("mmap should succeed");
 
-        // Access as 8KB pages (2 pages)
-        assert_eq!(mmap.page_count_with_size(8192), 2);
-        let page0 = mmap.page_with_size(0, 8192).expect("page should exist");
-        assert_eq!(page0.len(), 8192);
+        // Access as 64KB pages (2 pages)
+        assert_eq!(mmap.page_count_with_size(65536), 2);
+        let page0 = mmap.page_with_size(0, 65536).expect("page should exist");
+        assert_eq!(page0.len(), 65536);
 
-        // Access as 16KB pages (1 page)
-        assert_eq!(mmap.page_count_with_size(16384), 1);
-        let page0_large = mmap.page_with_size(0, 16384).expect("page should exist");
-        assert_eq!(page0_large.len(), 16384);
+        // Access as 128KB pages (1 page)
+        assert_eq!(mmap.page_count_with_size(131072), 1);
+        let page0_large = mmap.page_with_size(0, 131072).expect("page should exist");
+        assert_eq!(page0_large.len(), 131072);
 
         // Out of bounds with larger page size
-        assert!(mmap.page_with_size(1, 16384).is_none());
+        assert!(mmap.page_with_size(1, 131072).is_none());
 
         cleanup(&path);
     }

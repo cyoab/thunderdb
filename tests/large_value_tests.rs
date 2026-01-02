@@ -221,8 +221,8 @@ fn test_variable_page_size_configuration() {
         let options = DatabaseOptions::nvme_optimized();
         assert_eq!(
             options.page_size,
-            PageSizeConfig::Size16K,
-            "NVMe preset should use 16KB pages"
+            PageSizeConfig::Size32K,
+            "NVMe preset should use 32KB HPC pages"
         );
 
         let mut db = Database::open_with_options(&nvme_path, options)
@@ -387,8 +387,8 @@ fn test_large_value_combined_features() {
     cleanup(&path);
 
     let options = DatabaseOptions {
-        page_size: PageSizeConfig::Size16K,
-        overflow_threshold: 4096, // 4KB overflow threshold
+        page_size: PageSizeConfig::Size32K,
+        overflow_threshold: 16 * 1024, // 16KB overflow threshold
         write_buffer_size: 512 * 1024, // 512KB buffer
         ..Default::default()
     };

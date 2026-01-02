@@ -67,7 +67,7 @@ pub struct DatabaseOptions {
 impl Default for DatabaseOptions {
     fn default() -> Self {
         Self {
-            page_size: PageSizeConfig::Size4K,
+            page_size: PageSizeConfig::Size32K,
             overflow_threshold: DEFAULT_OVERFLOW_THRESHOLD,
             write_buffer_size: WRITE_BUFFER_SIZE,
             wal_enabled: false,
@@ -86,8 +86,8 @@ impl DatabaseOptions {
     /// Uses larger page sizes and buffers for better NVMe performance.
     pub fn nvme_optimized() -> Self {
         Self {
-            page_size: PageSizeConfig::Size16K,
-            overflow_threshold: 4096, // 4KB threshold
+            page_size: PageSizeConfig::Size32K,
+            overflow_threshold: 16 * 1024, // 16KB threshold
             write_buffer_size: 1024 * 1024, // 1MB buffer
             wal_enabled: false,
             wal_dir: None,

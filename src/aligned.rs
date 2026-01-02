@@ -8,8 +8,8 @@ use std::alloc::{alloc_zeroed, dealloc, Layout};
 use std::ops::{Deref, DerefMut};
 use std::ptr::NonNull;
 
-/// Default alignment for direct I/O (4KB, standard for most filesystems).
-pub const DEFAULT_ALIGNMENT: usize = 4096;
+/// Default alignment for direct I/O (32KB, HPC standard page size).
+pub const DEFAULT_ALIGNMENT: usize = 32768;
 
 /// A buffer with guaranteed memory alignment.
 ///
@@ -358,18 +358,18 @@ mod tests {
 
     #[test]
     fn test_aligned_buffer_creation() {
-        let buf = AlignedBuffer::new(1024, 4096);
+        let buf = AlignedBuffer::new(1024, 32768);
 
         assert_eq!(buf.len(), 0);
         assert!(buf.capacity() >= 1024);
-        assert_eq!(buf.capacity() % 4096, 0);
-        assert_eq!(buf.alignment(), 4096);
-        assert_eq!(buf.as_ptr() as usize % 4096, 0);
+        assert_eq!(buf.capacity() % 32768, 0);
+        assert_eq!(buf.alignment(), 32768);
+        assert_eq!(buf.as_ptr() as usize % 32768, 0);
     }
 
     #[test]
     fn test_aligned_buffer_extend() {
-        let mut buf = AlignedBuffer::new(4096, 4096);
+        let mut buf = AlignedBuffer::new(32768, 32768);
 
         buf.extend_from_slice(&[1, 2, 3, 4]);
         assert_eq!(buf.len(), 4);
@@ -382,14 +382,14 @@ mod tests {
 
     #[test]
     fn test_aligned_buffer_padding() {
-        let mut buf = AlignedBuffer::new(8192, 4096);
+        let mut buf = AlignedBuffer::new(65536, 32768);
 
         buf.extend_from_slice(&[0xAA; 100]);
         assert_eq!(buf.len(), 100);
 
         buf.pad_to_alignment();
-        assert_eq!(buf.len(), 4096);
-        assert_eq!(buf.len() % 4096, 0);
+        assert_eq!(buf.len(), 32768);
+        assert_eq!(buf.len() % 32768, 0);
 
         // Original data intact
         assert!(buf.as_slice()[..100].iter().all(|&b| b == 0xAA));
@@ -399,7 +399,7 @@ mod tests {
 
     #[test]
     fn test_aligned_buffer_clear() {
-        let mut buf = AlignedBuffer::new(4096, 4096);
+        let mut buf = AlignedBuffer::new(32768, 32768);
 
         buf.extend_from_slice(&[1, 2, 3, 4, 5]);
         assert_eq!(buf.len(), 5);
@@ -407,12 +407,12 @@ mod tests {
         buf.clear();
         assert_eq!(buf.len(), 0);
         assert!(buf.is_empty());
-        assert!(buf.capacity() >= 4096); // Capacity unchanged
+        assert!(buf.capacity() >= 32768); // Capacity unchanged
     }
 
     #[test]
     fn test_aligned_buffer_clone() {
-        let mut original = AlignedBuffer::new(4096, 4096);
+        let mut original = AlignedBuffer::new(32768, 32768);
         original.extend_from_slice(&[0x42; 100]);
 
         let clone = original.clone();
@@ -427,7 +427,7 @@ mod tests {
 
     #[test]
     fn test_aligned_buffer_deref() {
-        let mut buf = AlignedBuffer::new(4096, 4096);
+        let mut buf = AlignedBuffer::new(32768, 32768);
         buf.extend_from_slice(&[1, 2, 3, 4, 5]);
 
         // Test Deref
@@ -442,7 +442,7 @@ mod tests {
 
     #[test]
     fn test_aligned_buffer_various_alignments() {
-        for alignment in [512, 1024, 2048, 4096, 8192] {
+        for alignment in [512, 1024, 2048, 4096, 8192, 32768] {
             let buf = AlignedBuffer::new(1000, alignment);
             assert_eq!(buf.alignment(), alignment);
             assert_eq!(buf.as_ptr() as usize % alignment, 0);
@@ -458,13 +458,13 @@ mod tests {
 
     #[test]
     fn test_buffer_pool_basic() {
-        let mut pool = AlignedBufferPool::new(4096, 4096, 4);
+        let mut pool = AlignedBufferPool::new(32768, 32768, 4);
 
         assert_eq!(pool.available(), 0);
 
         let buf1 = pool.acquire();
         assert_eq!(pool.available(), 0);
-        assert!(buf1.capacity() >= 4096);
+        assert!(buf1.capacity() >= 32768);
 
         pool.release(buf1);
         assert_eq!(pool.available(), 1);
@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn test_buffer_pool_limit() {
-        let mut pool = AlignedBufferPool::new(4096, 4096, 2);
+        let mut pool = AlignedBufferPool::new(32768, 32768, 2);
 
         let bufs: Vec<_> = (0..3).map(|_| pool.acquire()).collect();
         assert_eq!(bufs.len(), 3);
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn test_buffer_pool_preallocate() {
-        let mut pool = AlignedBufferPool::new(4096, 4096, 8);
+        let mut pool = AlignedBufferPool::new(32768, 32768, 8);
 
         pool.preallocate(5);
         assert_eq!(pool.available(), 5);
@@ -502,20 +502,20 @@ mod tests {
 
     #[test]
     fn test_is_aligned() {
-        let buf = AlignedBuffer::new(4096, 4096);
+        let buf = AlignedBuffer::new(32768, 32768);
 
-        assert!(buf.is_aligned(0, 4096));
-        assert!(buf.is_aligned(4096, 8192));
-        assert!(!buf.is_aligned(100, 4096)); // Offset not aligned
+        assert!(buf.is_aligned(0, 32768));
+        assert!(buf.is_aligned(32768, 65536));
+        assert!(!buf.is_aligned(100, 32768)); // Offset not aligned
         assert!(!buf.is_aligned(0, 100)); // Length not aligned
         assert!(!buf.is_aligned(100, 100)); // Neither aligned
     }
 
     #[test]
     fn test_default_alignment() {
-        assert_eq!(DEFAULT_ALIGNMENT, 4096);
+        assert_eq!(DEFAULT_ALIGNMENT, 32768);
 
         let buf = AlignedBuffer::with_default_alignment(1024);
-        assert_eq!(buf.alignment(), 4096);
+        assert_eq!(buf.alignment(), 32768);
     }
 }

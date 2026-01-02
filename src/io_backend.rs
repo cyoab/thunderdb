@@ -333,7 +333,7 @@ mod tests {
     #[test]
     fn test_sync_backend_roundtrip() {
         let path = test_file("roundtrip");
-        let file = create_file(&path, 4096);
+        let file = create_file(&path, 32768);
         let mut backend = SyncBackend::new(file);
 
         let test_data = b"Hello, thunder!";

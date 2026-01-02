@@ -274,32 +274,32 @@ mod tests {
 
     #[test]
     fn test_coalescer_basic() {
-        let mut coalescer = WriteCoalescer::new(4096, 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 1024 * 1024);
 
         assert!(coalescer.is_empty());
         assert_eq!(coalescer.buffer_size(), 0);
 
         // Add a page
-        coalescer.queue_page(10, vec![0xAAu8; 4096]);
+        coalescer.queue_page(10, vec![0xAAu8; 32768]);
         assert!(!coalescer.is_empty());
-        assert_eq!(coalescer.buffer_size(), 4096);
+        assert_eq!(coalescer.buffer_size(), 32768);
 
         // Add sequential data
         coalescer.queue_sequential(&[0xBB; 1024]);
-        assert_eq!(coalescer.buffer_size(), 4096 + 1024);
+        assert_eq!(coalescer.buffer_size(), 32768 + 1024);
     }
 
     #[test]
     fn test_coalescer_page_deduplication() {
-        let mut coalescer = WriteCoalescer::new(4096, 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 1024 * 1024);
 
         // Write same page multiple times
-        coalescer.queue_page(5, vec![0x11u8; 4096]);
-        coalescer.queue_page(5, vec![0x22u8; 4096]);
-        coalescer.queue_page(5, vec![0x33u8; 4096]);
+        coalescer.queue_page(5, vec![0x11u8; 32768]);
+        coalescer.queue_page(5, vec![0x22u8; 32768]);
+        coalescer.queue_page(5, vec![0x33u8; 32768]);
 
         // Should only have one page worth of buffer
-        assert_eq!(coalescer.buffer_size(), 4096);
+        assert_eq!(coalescer.buffer_size(), 32768);
 
         let batch = coalescer.into_write_batch();
         assert_eq!(batch.pages.len(), 1);
@@ -309,12 +309,12 @@ mod tests {
 
     #[test]
     fn test_coalescer_sorted_pages() {
-        let mut coalescer = WriteCoalescer::new(4096, 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 1024 * 1024);
 
         // Add pages in random order
-        coalescer.queue_page(30, vec![0x30u8; 4096]);
-        coalescer.queue_page(10, vec![0x10u8; 4096]);
-        coalescer.queue_page(20, vec![0x20u8; 4096]);
+        coalescer.queue_page(30, vec![0x30u8; 32768]);
+        coalescer.queue_page(10, vec![0x10u8; 32768]);
+        coalescer.queue_page(20, vec![0x20u8; 32768]);
 
         let batch = coalescer.into_write_batch();
 
@@ -327,68 +327,68 @@ mod tests {
 
     #[test]
     fn test_coalescer_should_flush() {
-        let mut coalescer = WriteCoalescer::new(4096, 10 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 80 * 1024);
 
         assert!(!coalescer.should_flush());
 
         // Add data below threshold
-        coalescer.queue_page(1, vec![0u8; 4096]);
-        coalescer.queue_page(2, vec![0u8; 4096]);
+        coalescer.queue_page(1, vec![0u8; 32768]);
+        coalescer.queue_page(2, vec![0u8; 32768]);
         assert!(!coalescer.should_flush());
 
         // Add data to exceed threshold
-        coalescer.queue_page(3, vec![0u8; 4096]);
-        assert!(coalescer.should_flush()); // 12KB > 10KB threshold
+        coalescer.queue_page(3, vec![0u8; 32768]);
+        assert!(coalescer.should_flush()); // 96KB > 80KB threshold
     }
 
     #[test]
     fn test_contiguous_ranges() {
-        let mut coalescer = WriteCoalescer::new(4096, 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 1024 * 1024);
 
         // Add contiguous pages 10, 11, 12
-        coalescer.queue_page(10, vec![0x10u8; 4096]);
-        coalescer.queue_page(11, vec![0x11u8; 4096]);
-        coalescer.queue_page(12, vec![0x12u8; 4096]);
+        coalescer.queue_page(10, vec![0x10u8; 32768]);
+        coalescer.queue_page(11, vec![0x11u8; 32768]);
+        coalescer.queue_page(12, vec![0x12u8; 32768]);
 
         // Add non-contiguous page 20
-        coalescer.queue_page(20, vec![0x20u8; 4096]);
+        coalescer.queue_page(20, vec![0x20u8; 32768]);
 
         // Add contiguous pages 21, 22
-        coalescer.queue_page(21, vec![0x21u8; 4096]);
-        coalescer.queue_page(22, vec![0x22u8; 4096]);
+        coalescer.queue_page(21, vec![0x21u8; 32768]);
+        coalescer.queue_page(22, vec![0x22u8; 32768]);
 
         let batch = coalescer.into_write_batch();
-        let (_, ranges) = batch.into_contiguous_ranges(4096);
+        let (_, ranges) = batch.into_contiguous_ranges(32768);
 
         // Should have 2 ranges: [10-12] and [20-22]
         assert_eq!(ranges.len(), 2);
 
         assert_eq!(ranges[0].start_page, 10);
         assert_eq!(ranges[0].page_count, 3);
-        assert_eq!(ranges[0].data.len(), 3 * 4096);
+        assert_eq!(ranges[0].data.len(), 3 * 32768);
 
         assert_eq!(ranges[1].start_page, 20);
         assert_eq!(ranges[1].page_count, 3);
-        assert_eq!(ranges[1].data.len(), 3 * 4096);
+        assert_eq!(ranges[1].data.len(), 3 * 32768);
     }
 
     #[test]
     fn test_write_batch_total_size() {
-        let mut coalescer = WriteCoalescer::new(4096, 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 1024 * 1024);
 
-        coalescer.queue_page(1, vec![0u8; 4096]);
-        coalescer.queue_page(2, vec![0u8; 4096]);
+        coalescer.queue_page(1, vec![0u8; 32768]);
+        coalescer.queue_page(2, vec![0u8; 32768]);
         coalescer.queue_sequential(&[0u8; 1024]);
 
         let batch = coalescer.into_write_batch();
-        assert_eq!(batch.total_size(), 4096 + 4096 + 1024);
+        assert_eq!(batch.total_size(), 32768 + 32768 + 1024);
     }
 
     #[test]
     fn test_take_batch() {
-        let mut coalescer = WriteCoalescer::new(4096, 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 1024 * 1024);
 
-        coalescer.queue_page(1, vec![0xAAu8; 4096]);
+        coalescer.queue_page(1, vec![0xAAu8; 32768]);
         coalescer.queue_sequential(&[0xBB; 512]);
 
         let batch = coalescer.take_batch();

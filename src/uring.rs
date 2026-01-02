@@ -333,7 +333,7 @@ mod tests {
         assert!(backend.optimal_batch_size() > 0);
 
         // Write test
-        let test_data = vec![0xABu8; 4096];
+        let test_data = vec![0xABu8; 32768];
         backend
             .write_batch(vec![WriteOp::new(0, test_data.clone())])
             .expect("write should succeed");
@@ -341,7 +341,7 @@ mod tests {
 
         // Read back
         let results = backend
-            .read_batch(vec![ReadOp::new(0, 4096)])
+            .read_batch(vec![ReadOp::new(0, 32768)])
             .expect("read should succeed");
 
         assert_eq!(results.len(), 1);
@@ -357,7 +357,7 @@ mod tests {
         }
 
         let path = test_file("batch");
-        let file = create_file(&path, 256 * 1024);
+        let file = create_file(&path, 1024 * 1024);
 
         let backend_result = UringBackend::with_defaults(file);
         if backend_result.is_err() {
@@ -369,14 +369,14 @@ mod tests {
 
         // Write multiple pages
         let write_ops: Vec<WriteOp> = (0..16)
-            .map(|i| WriteOp::new(i * 4096, vec![(i & 0xFF) as u8; 4096]))
+            .map(|i| WriteOp::new(i * 32768, vec![(i & 0xFF) as u8; 32768]))
             .collect();
 
         backend.write_batch(write_ops).expect("batch write");
         backend.sync().expect("sync");
 
         // Read them back
-        let read_ops: Vec<ReadOp> = (0..16).map(|i| ReadOp::new(i * 4096, 4096)).collect();
+        let read_ops: Vec<ReadOp> = (0..16).map(|i| ReadOp::new(i * 32768, 32768)).collect();
 
         let results = backend.read_batch(read_ops).expect("batch read");
         assert_eq!(results.len(), 16);

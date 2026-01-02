@@ -1,14 +1,14 @@
 //! Summary: Page layout, encoding, and helper utilities.
 //! Copyright (c) YOAB. All rights reserved.
 
-/// Default page size in bytes (4KB).
-pub const PAGE_SIZE: usize = 4096;
+/// Default page size in bytes (32KB - HPC standard).
+pub const PAGE_SIZE: usize = 32768;
 
 /// Magic number to identify thunder database files.
 pub const MAGIC: u32 = 0x54_48_4E_44; // "THND" in ASCII
 
 /// Current database file format version.
-pub const VERSION: u32 = 2; // Bumped for Phase 2 features
+pub const VERSION: u32 = 3; // Bumped for 32KB HPC page size
 
 /// Page identifier type.
 pub type PageId = u64;
@@ -16,20 +16,23 @@ pub type PageId = u64;
 /// Supported page size configurations.
 ///
 /// Different page sizes optimize for different workloads:
-/// - 4KB: Traditional, good for small values and random access
+/// - 4KB: Legacy, good for small values and random access
 /// - 8KB: Balanced performance
-/// - 16KB: Recommended for NVMe, better for larger values
+/// - 16KB: Good for NVMe, better for larger values
+/// - 32KB: HPC standard (default), optimal for modern storage
 /// - 64KB: High-throughput workloads with large sequential writes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u32)]
 pub enum PageSizeConfig {
-    /// 4KB pages (default, traditional).
-    #[default]
+    /// 4KB pages (legacy).
     Size4K = 4096,
     /// 8KB pages.
     Size8K = 8192,
-    /// 16KB pages (recommended for NVMe).
+    /// 16KB pages.
     Size16K = 16384,
+    /// 32KB pages (HPC standard, default).
+    #[default]
+    Size32K = 32768,
     /// 64KB pages (high-throughput workloads).
     Size64K = 65536,
 }
@@ -49,6 +52,7 @@ impl PageSizeConfig {
             4096 => Some(Self::Size4K),
             8192 => Some(Self::Size8K),
             16384 => Some(Self::Size16K),
+            32768 => Some(Self::Size32K),
             65536 => Some(Self::Size64K),
             _ => None,
         }
@@ -83,11 +87,11 @@ mod tests {
 
     #[test]
     fn test_page_constants() {
-        assert_eq!(PAGE_SIZE, 4096);
+        assert_eq!(PAGE_SIZE, 32768);
         assert!(PAGE_SIZE.is_power_of_two());
         assert_eq!(MAGIC, 0x54_48_4E_44);
         assert_eq!(&MAGIC.to_be_bytes(), b"THND");
-        assert_eq!(VERSION, 2);
+        assert_eq!(VERSION, 3);
     }
 
     #[test]
@@ -106,18 +110,20 @@ mod tests {
         assert_eq!(PageSizeConfig::Size4K.as_usize(), 4096);
         assert_eq!(PageSizeConfig::Size8K.as_usize(), 8192);
         assert_eq!(PageSizeConfig::Size16K.as_usize(), 16384);
+        assert_eq!(PageSizeConfig::Size32K.as_usize(), 32768);
         assert_eq!(PageSizeConfig::Size64K.as_usize(), 65536);
 
         assert_eq!(PageSizeConfig::from_u32(4096), Some(PageSizeConfig::Size4K));
         assert_eq!(PageSizeConfig::from_u32(8192), Some(PageSizeConfig::Size8K));
         assert_eq!(PageSizeConfig::from_u32(16384), Some(PageSizeConfig::Size16K));
+        assert_eq!(PageSizeConfig::from_u32(32768), Some(PageSizeConfig::Size32K));
         assert_eq!(PageSizeConfig::from_u32(65536), Some(PageSizeConfig::Size64K));
         assert_eq!(PageSizeConfig::from_u32(1024), None);
         assert_eq!(PageSizeConfig::from_u32(0), None);
 
-        assert!(PageSizeConfig::is_valid(4096));
+        assert!(PageSizeConfig::is_valid(32768));
         assert!(!PageSizeConfig::is_valid(1000));
 
-        assert_eq!(PageSizeConfig::default(), PageSizeConfig::Size4K);
+        assert_eq!(PageSizeConfig::default(), PageSizeConfig::Size32K);
     }
 }

@@ -404,7 +404,7 @@ impl Wal {
             SyncPolicy::Batched(_) => {
                 // Sync if we've accumulated significant data
                 // The actual time-based batching is handled by GroupCommit
-                if self.pending_bytes >= 4096 {
+                if self.pending_bytes >= 32768 {
                     self.current_segment.sync()?;
                     self.pending_bytes = 0;
                 }

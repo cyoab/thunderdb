@@ -239,10 +239,10 @@ mod tests {
     use crate::coalescer::WriteCoalescer;
 
     fn create_test_batch(num_pages: usize) -> WriteBatch {
-        let mut coalescer = WriteCoalescer::new(4096, 16 * 1024 * 1024);
+        let mut coalescer = WriteCoalescer::new(32768, 16 * 1024 * 1024);
 
         for i in 0..num_pages {
-            coalescer.queue_page(i as u64, vec![(i & 0xFF) as u8; 4096]);
+            coalescer.queue_page(i as u64, vec![(i & 0xFF) as u8; 32768]);
         }
         coalescer.queue_sequential(&[0xEE; 1024]);
 

@@ -878,8 +878,8 @@ fn stress_large_values() {
     let sizes = [
         1,              // Tiny
         100,            // Small
-        4096,           // Page size
-        4097,           // Just over page
+        32768,          // Page size
+        32769,          // Just over page
         65_536,         // 64KB
         1_000_000,      // 1MB
         10_000_000,     // 10MB

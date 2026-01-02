@@ -59,8 +59,8 @@ mod wal_integrity_and_recovery {
                 value: b"test_value".to_vec(),
             },
             WalRecord::Put {
-                key: vec![0u8; 1024],    // Large key
-                value: vec![0xFF; 4096], // Large value
+                key: vec![0u8; 1024],     // Large key
+                value: vec![0xFF; 32768], // Large value (page size)
             },
             WalRecord::Delete {
                 key: b"deleted_key".to_vec(),
@@ -250,14 +250,15 @@ mod wal_integrity_and_recovery {
 
         // Use small segment size to trigger rotation
         let config = WalConfig {
-            segment_size: 4096, // 4KB segments
+            segment_size: 32768, // 32KB segments (HPC page size)
             sync_policy: SyncPolicy::Immediate,
         };
 
         let mut wal = Wal::open(&wal_dir, config).expect("open WAL");
 
-        // Write enough data to trigger rotation
-        for i in 0..100 {
+        // Write enough data to trigger rotation (need > 32KB per segment)
+        // Each Put record is ~90 bytes + overhead, so 400 records should fill multiple segments
+        for i in 0..400 {
             wal.append(&WalRecord::Put {
                 key: format!("key_{i:05}").into_bytes(),
                 value: vec![0xAB; 64], // 64-byte values
@@ -603,7 +604,7 @@ mod checkpoint_recovery {
         fs::create_dir_all(&wal_dir).expect("create dirs");
 
         let wal_config = WalConfig {
-            segment_size: 4096,
+            segment_size: 32768,
             sync_policy: SyncPolicy::Immediate,
         };
         let mut wal = Wal::open(&wal_dir, wal_config).expect("open WAL");

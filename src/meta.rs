@@ -236,7 +236,7 @@ mod tests {
     fn test_meta_validate_with_page_size() {
         let meta = Meta::with_page_size(8192);
         assert!(meta.validate_with_page_size(8192));
-        assert!(!meta.validate_with_page_size(4096)); // Mismatch
+        assert!(!meta.validate_with_page_size(32768)); // Mismatch
     }
 
     #[test]
