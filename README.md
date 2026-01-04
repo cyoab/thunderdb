@@ -1,19 +1,19 @@
-# ⚡ Thunder
+# ⚡ ThunderDB
 
-**Thunder** is a fast, embedded, transactional key-value database engine written in Rust, optimized for **read-heavy workloads**. Inspired by [BBolt](https://github.com/etcd-io/bbolt).
+**ThunderDB** is a high-performance, embedded, transactional key-value database engine written in Rust. Keys and values are arbitrarily-sized byte streams. Optimized for fast, low-latency storage such as flash drives and high-speed disk drives, ThunderDB exploits the full potential of high read/write rates offered by flash or RAM.
 
-What started as a hobby/learning project has evolved into a capable embedded database that delivers **best-in-class read performance** — outperforming RocksDB, Sled, and BBolt on sequential reads, random reads, and iterator scans while remaining simple (~3,500 lines of Rust).
+Inspired by [BBolt](https://github.com/etcd-io/bbolt) and [RocksDB](https://rocksdb.org/), ThunderDB delivers **best-in-class read performance** — outperforming RocksDB, Sled, and BBolt on sequential reads, random reads, and iterator scans.
 
-> ⚠️ **Work in Progress**: Thunder is still under active development. For battle-tested, production-ready embedded databases, consider [SQLite](https://sqlite.org/), [RocksDB](https://rocksdb.org/), or [BBolt](https://github.com/etcd-io/bbolt). Thunder is ideal for learning, experimentation, and read-heavy use cases.
+> ⚠️ **Work in Progress**: ThunderDB is still under active development and showing promising benchmark results. However, more comprehensive benchmarking is required and the project continues to evolve. For battle-tested, production-ready embedded databases, consider [SQLite](https://sqlite.org/), [RocksDB](https://rocksdb.org/), or [BBolt](https://github.com/etcd-io/bbolt).
 
 ## When to Use Thunder
 
-✅ **Thunder is ideal for:**
+✅ **ThunderDB is ideal for:**
 - **Read-heavy workloads** — 2.6M sequential reads/sec, 1.1M random reads/sec
 - **Range scans & analytics** — 78.6M iterator ops/sec (19× faster than RocksDB)
 - **Document storage (10-100KB values)** — 484-642 MB/sec throughput
-- **Embedded applications** — Simple API, single-file storage, minimal dependencies
-- **Learning & experimentation** — Clean, readable codebase
+- **Embedded applications** — Single-file storage, minimal dependencies
+- **Low-latency storage** — Optimized for flash drives and high-speed disks
 
 ❌ **Consider alternatives for:**
 - **Write-heavy workloads** — RocksDB is 1.9× faster for bulk writes
@@ -170,19 +170,27 @@ tx.commit()?;
 
 ## Limitations
 
-Thunder is a hobby project that has grown into something useful, but it has limitations compared to mature solutions:
+ThunderDB has some limitations compared to mature solutions:
 
-- **No cursor API** — Only forward iteration is supported
+- **No cursor API** — Only forward iteration is currently supported
 - **No compaction** — Deleted data is not reclaimed until full rewrite
 - **No encryption** — Data is stored in plaintext
 - **No compression** — Values are stored as-is
-- **Limited testing** — Not battle-tested in production environments
+- **Limited testing** — Not yet battle-tested in production environments
+
+### Design Philosophy
+
+Encryption and compression are intentional design choices. ThunderDB serves as a **storage primitive** — it is the responsibility of the application or a higher-level system to handle encryption, compression, and other data transformations. This keeps the core database lean and focused on performance.
+
+### Roadmap
+
+Planned features for future releases:
+- **Cursor API** — Bidirectional iteration with seek support
+- **Compaction** — Reclaim space from deleted entries
 
 For production use cases requiring stability and robustness, please use established solutions like SQLite, RocksDB, or BBolt.
 
 ## Architecture
-
-Thunder is implemented in ~3,500 lines of Rust:
 
 ```
 src/
