@@ -40,7 +40,7 @@ pub const DEFAULT_ARENA_SIZE: usize = 64 * 1024;
 /// # Example
 ///
 /// ```
-/// use thunder::arena::Arena;
+/// use thunderdb::arena::Arena;
 ///
 /// let mut arena = Arena::new(1024);
 ///
@@ -339,7 +339,7 @@ impl Default for Arena {
 /// # Example
 ///
 /// ```
-/// use thunder::arena::TypedArena;
+/// use thunderdb::arena::TypedArena;
 ///
 /// let mut arena: TypedArena<u64> = TypedArena::new(1024);
 ///

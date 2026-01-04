@@ -219,7 +219,7 @@ impl PoolStats {
 /// # Example
 ///
 /// ```
-/// use thunder::node_pool::NodePool;
+/// use thunderdb::node_pool::NodePool;
 ///
 /// let mut pool = NodePool::new(16);
 ///

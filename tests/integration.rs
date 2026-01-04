@@ -4,7 +4,7 @@
 #![allow(clippy::drop_non_drop)] // Explicit drops for test clarity
 
 use std::fs;
-use thunder::{Database, Error};
+use thunderdb::{Database, Error};
 
 fn test_db_path(name: &str) -> String {
     format!("/tmp/thunder_integration_test_{name}.db")

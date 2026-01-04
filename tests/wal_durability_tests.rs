@@ -9,11 +9,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use thunder::checkpoint::{CheckpointConfig, CheckpointManager};
-use thunder::group_commit::{GroupCommitConfig, GroupCommitManager};
-use thunder::wal::{SyncPolicy, Wal, WalConfig};
-use thunder::wal_record::WalRecord;
-use thunder::{Database, DatabaseOptions};
+use thunderdb::checkpoint::{CheckpointConfig, CheckpointManager};
+use thunderdb::group_commit::{GroupCommitConfig, GroupCommitManager};
+use thunderdb::wal::{SyncPolicy, Wal, WalConfig};
+use thunderdb::wal_record::WalRecord;
+use thunderdb::{Database, DatabaseOptions};
 
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -73,7 +73,7 @@ mod wal_integrity_and_recovery {
             let encoded = original.encode();
 
             // Verify minimum size (header + at least some payload)
-            assert!(encoded.len() >= thunder::wal_record::RECORD_HEADER_SIZE);
+            assert!(encoded.len() >= thunderdb::wal_record::RECORD_HEADER_SIZE);
 
             // Decode and verify roundtrip
             let (decoded, consumed) =
@@ -114,10 +114,10 @@ mod wal_integrity_and_recovery {
         };
 
         let mut encoded = record.encode();
-        assert!(encoded.len() > thunder::wal_record::RECORD_HEADER_SIZE);
+        assert!(encoded.len() > thunderdb::wal_record::RECORD_HEADER_SIZE);
 
         // Corrupt a byte in the payload
-        let corrupt_idx = thunder::wal_record::RECORD_HEADER_SIZE + 2;
+        let corrupt_idx = thunderdb::wal_record::RECORD_HEADER_SIZE + 2;
         if corrupt_idx < encoded.len() {
             encoded[corrupt_idx] ^= 0xFF;
         }

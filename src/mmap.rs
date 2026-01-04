@@ -41,7 +41,7 @@ pub enum AccessPattern {
 /// # Example
 ///
 /// ```ignore
-/// use thunder::mmap::{MmapOptions, AccessPattern};
+/// use thunderdb::mmap::{MmapOptions, AccessPattern};
 ///
 /// let options = MmapOptions::new()
 ///     .with_access_pattern(AccessPattern::Sequential)

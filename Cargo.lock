@@ -110,7 +110,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "thunder"
+name = "thunderdb"
 version = "0.3.0"
 dependencies = [
  "crc32fast",

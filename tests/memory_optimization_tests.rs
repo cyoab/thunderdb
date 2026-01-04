@@ -24,8 +24,8 @@ fn cleanup(path: &str) {
 fn test_mmap_access_hint_sequential() {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use thunder::mmap::{AccessPattern, Mmap, MmapOptions};
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::mmap::{AccessPattern, Mmap, MmapOptions};
+    use thunderdb::page::PAGE_SIZE;
 
     let path = test_db_path("mmap_sequential");
     cleanup(&path);
@@ -84,8 +84,8 @@ fn test_mmap_access_hint_sequential() {
 fn test_mmap_access_hint_random() {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use thunder::mmap::{AccessPattern, Mmap, MmapOptions};
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::mmap::{AccessPattern, Mmap, MmapOptions};
+    use thunderdb::page::PAGE_SIZE;
 
     let path = test_db_path("mmap_random");
     cleanup(&path);
@@ -134,8 +134,8 @@ fn test_mmap_access_hint_random() {
 fn test_mmap_prefetch() {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use thunder::mmap::Mmap;
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::mmap::Mmap;
+    use thunderdb::page::PAGE_SIZE;
 
     let path = test_db_path("mmap_prefetch");
     cleanup(&path);
@@ -189,8 +189,8 @@ fn test_mmap_prefetch() {
 fn test_mmap_populate_flag() {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use thunder::mmap::{Mmap, MmapOptions};
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::mmap::{Mmap, MmapOptions};
+    use thunderdb::page::PAGE_SIZE;
 
     let path = test_db_path("mmap_populate");
     cleanup(&path);
@@ -238,7 +238,7 @@ fn test_mmap_populate_flag() {
 
 #[test]
 fn test_arena_cache_line_alignment() {
-    use thunder::arena::Arena;
+    use thunderdb::arena::Arena;
 
     let mut arena = Arena::new(4096);
 
@@ -271,8 +271,8 @@ fn test_arena_cache_line_alignment() {
 
 #[test]
 fn test_arena_page_alignment() {
-    use thunder::arena::Arena;
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::arena::Arena;
+    use thunderdb::page::PAGE_SIZE;
 
     let mut arena = Arena::new(PAGE_SIZE * 4);
 
@@ -293,8 +293,8 @@ fn test_arena_page_alignment() {
 fn test_mmap_dontneed_hint() {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use thunder::mmap::Mmap;
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::mmap::Mmap;
+    use thunderdb::page::PAGE_SIZE;
 
     let path = test_db_path("mmap_dontneed");
     cleanup(&path);
@@ -345,7 +345,7 @@ fn test_mmap_dontneed_hint() {
 
 #[test]
 fn test_database_with_sequential_mmap() {
-    use thunder::{Database, DatabaseOptions};
+    use thunderdb::{Database, DatabaseOptions};
 
     let path = test_db_path("db_seq_mmap");
     cleanup(&path);
@@ -387,8 +387,8 @@ fn test_database_with_sequential_mmap() {
 fn test_large_file_mmap_performance() {
     use std::fs::OpenOptions;
     use std::io::Write;
-    use thunder::mmap::{AccessPattern, Mmap, MmapOptions};
-    use thunder::page::PAGE_SIZE;
+    use thunderdb::mmap::{AccessPattern, Mmap, MmapOptions};
+    use thunderdb::page::PAGE_SIZE;
 
     let path = test_db_path("mmap_large_perf");
     cleanup(&path);

@@ -69,9 +69,9 @@ See [bench.md](bench.md) for full benchmark details and methodology.
 ## Quick Start
 
 ```rust
-use thunder::Database;
+use thunderdb::Database;
 
-fn main() -> thunder::Result<()> {
+fn main() -> thunderdb::Result<()> {
     // Open or create a database
     let mut db = Database::open("my.db")?;
 

@@ -1,7 +1,12 @@
 [package]
-name = "thunder"
+name = "thunderdb"
 version = "0.3.0"
 edition = "2024"
+description = "A minimal, embedded, transactional key-value database engine"
+license = "MIT"
+repository = "https://github.com/cyoab/thunderdb"
+keywords = ["database", "key-value", "embedded", "storage", "btree"]
+categories = ["database-implementations", "data-structures"]
 
 [features]
 default = []

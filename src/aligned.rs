@@ -55,7 +55,7 @@ impl AlignedBuffer {
     /// # Example
     ///
     /// ```
-    /// use thunder::aligned::AlignedBuffer;
+    /// use thunderdb::aligned::AlignedBuffer;
     ///
     /// let buf = AlignedBuffer::new(8192, 4096);
     /// assert_eq!(buf.alignment(), 4096);

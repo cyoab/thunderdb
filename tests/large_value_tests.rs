@@ -7,7 +7,7 @@
 //! - Write coalescing buffer for efficient I/O
 
 use std::fs;
-use thunder::{Database, DatabaseOptions, PageSizeConfig};
+use thunderdb::{Database, DatabaseOptions, PageSizeConfig};
 
 fn test_db_path(name: &str) -> String {
     format!("/tmp/thunder_large_value_test_{name}.db")
