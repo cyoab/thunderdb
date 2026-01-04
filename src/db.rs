@@ -908,6 +908,9 @@ impl Database {
         }
 
         // Write entry data (sequential data) first
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("before_data_write");
+
         if let Err(e) = self.file.seek(SeekFrom::Start(data_offset)) {
             return Err(Error::FileSeek {
                 offset: data_offset,
@@ -924,8 +927,14 @@ impl Database {
             });
         }
 
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("after_data_write");
+
         // Write ALL overflow data with a single syscall
         if let Some(start_page) = first_overflow_page {
+            #[cfg(feature = "failpoint")]
+            crate::failpoint!("before_overflow_write");
+
             let offset = start_page * page_size as u64;
             if let Err(e) = self.file.seek(SeekFrom::Start(offset)) {
                 return Err(Error::FileSeek {
@@ -942,6 +951,9 @@ impl Database {
                     source: e,
                 });
             }
+
+            #[cfg(feature = "failpoint")]
+            crate::failpoint!("after_overflow_write");
         }
 
         // Update overflow refs
@@ -953,8 +965,21 @@ impl Database {
         self.persisted_entry_count = entry_count;
 
         // Update meta page.
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("before_txid_increment");
+
         self.meta.txid += 1;
+
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("after_txid_increment");
+
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("before_root_update");
+
         self.meta.root = if self.tree.is_empty() { 0 } else { 1 };
+
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("after_root_update");
 
         // Write to alternating meta page.
         let meta_page = if self.meta.txid.is_multiple_of(2) {
@@ -963,6 +988,9 @@ impl Database {
             1
         };
         let meta_offset = meta_page * PAGE_SIZE as u64;
+
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("before_meta_write");
 
         if let Err(e) = self.file.seek(SeekFrom::Start(meta_offset)) {
             return Err(Error::FileSeek {
@@ -982,8 +1010,17 @@ impl Database {
             });
         }
 
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("after_meta_write");
+
         // Use fdatasync instead of fsync for better performance (skips metadata sync).
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("before_fsync");
+
         Self::fdatasync(&self.file)?;
+
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("after_fsync");
 
         // Refresh mmap to reflect new file size.
         #[cfg(unix)]
@@ -1283,6 +1320,9 @@ impl Database {
         // This avoids multiple seek syscalls and is more efficient
         #[cfg(unix)]
         {
+            #[cfg(feature = "failpoint")]
+            crate::failpoint!("incr_before_meta_write");
+
             let meta_bytes = self.meta.to_bytes();
 
             // Write meta page using pwrite
@@ -1294,6 +1334,12 @@ impl Database {
                     source: e,
                 });
             }
+
+            #[cfg(feature = "failpoint")]
+            crate::failpoint!("incr_after_meta_write");
+
+            #[cfg(feature = "failpoint")]
+            crate::failpoint!("incr_before_entry_write");
 
             // Write entry count using pwrite
             let data_offset = 2 * PAGE_SIZE as u64;
@@ -1319,6 +1365,9 @@ impl Database {
                     source: e,
                 });
             }
+
+            #[cfg(feature = "failpoint")]
+            crate::failpoint!("incr_after_entry_write");
 
             // Write overflow data using pwrite at the calculated byte offset
             if has_overflow_data
@@ -1408,7 +1457,13 @@ impl Database {
         }
 
         // Use fdatasync for better performance.
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("incr_before_fsync");
+
         Self::fdatasync(&self.file)?;
+
+        #[cfg(feature = "failpoint")]
+        crate::failpoint!("incr_after_fsync");
 
         // Refresh mmap to reflect new file size.
         #[cfg(unix)]

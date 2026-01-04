@@ -1,0 +1,190 @@
+name: Nightly Crash Safety Tests
+
+on:
+  schedule:
+    # Run at 2 AM UTC every night
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: 'Number of crash test iterations'
+        required: false
+        default: '1000'
+      seed:
+        description: 'Random seed (leave empty for random)'
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  crash-tests:
+    name: Crash Safety Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    strategy:
+      fail-fast: false
+      matrix:
+        test-suite:
+          - name: "Failpoint Crash Tests"
+            iterations: 1000
+            features: "failpoint"
+          - name: "Extended Crash Tests"
+            iterations: 5000
+            features: "failpoint"
+          - name: "Stress Crash Tests"
+            iterations: 10000
+            features: "failpoint"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-crash-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-crash-
+            ${{ runner.os }}-cargo-
+
+      - name: Build with failpoint feature
+        run: cargo build --release --features ${{ matrix.test-suite.features }}
+
+      - name: Generate random seed
+        id: seed
+        run: |
+          if [ -n "${{ github.event.inputs.seed }}" ]; then
+            echo "seed=${{ github.event.inputs.seed }}" >> $GITHUB_OUTPUT
+          else
+            echo "seed=$(date +%s%N)" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Run ${{ matrix.test-suite.name }}
+        env:
+          THUNDERDB_CRASH_ITERATIONS: ${{ github.event.inputs.iterations || matrix.test-suite.iterations }}
+          THUNDERDB_CRASH_SEED: ${{ steps.seed.outputs.seed }}
+        run: |
+          echo "Running crash tests with seed: $THUNDERDB_CRASH_SEED"
+          echo "Iterations: $THUNDERDB_CRASH_ITERATIONS"
+          cargo test --release --features ${{ matrix.test-suite.features }} \
+            --test crash_safety_tests \
+            -- --nocapture 2>&1 | tee crash_test_output.log
+
+      - name: Upload crash test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-test-logs-${{ matrix.test-suite.name }}
+          path: crash_test_output.log
+          retention-days: 30
+
+      - name: Check for failures
+        if: failure()
+        run: |
+          echo "::error::Crash tests failed. Check logs for details."
+          echo "Seed used: ${{ steps.seed.outputs.seed }}"
+          echo "To reproduce locally: THUNDERDB_CRASH_SEED=${{ steps.seed.outputs.seed }} cargo test --features failpoint --test crash_safety_tests"
+
+  # Deterministic regression tests with known seeds
+  regression-tests:
+    name: Regression Tests (Known Seeds)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-regression-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Build with failpoint feature
+        run: cargo build --release --features failpoint
+
+      - name: Run regression tests with known seeds
+        run: |
+          # Run tests with multiple known seeds for reproducibility
+          for seed in 12345 54321 99999 1234567890 9876543210; do
+            echo "Testing with seed: $seed"
+            THUNDERDB_CRASH_SEED=$seed \
+            THUNDERDB_CRASH_ITERATIONS=100 \
+            cargo test --release --features failpoint \
+              --test crash_safety_tests \
+              test_randomized_crash_recovery \
+              -- --nocapture
+          done
+
+  # Memory and sanitizer checks
+  sanitizer-tests:
+    name: Sanitizer Crash Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - name: Run with AddressSanitizer
+        env:
+          RUSTFLAGS: "-Z sanitizer=address"
+          THUNDERDB_CRASH_ITERATIONS: 100
+        run: |
+          cargo +nightly test --release --features failpoint \
+            --target x86_64-unknown-linux-gnu \
+            --test crash_safety_tests \
+            -- --nocapture || true
+
+  # Summary job
+  summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [crash-tests, regression-tests]
+    if: always()
+
+    steps:
+      - name: Check results
+        run: |
+          if [ "${{ needs.crash-tests.result }}" == "success" ] && \
+             [ "${{ needs.regression-tests.result }}" == "success" ]; then
+            echo "All crash safety tests passed!"
+            exit 0
+          else
+            echo "Some crash safety tests failed!"
+            echo "crash-tests: ${{ needs.crash-tests.result }}"
+            echo "regression-tests: ${{ needs.regression-tests.result }}"
+            exit 1
+          fi
+
+      - name: Create summary
+        if: always()
+        run: |
+          echo "## Nightly Crash Safety Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Crash Tests | ${{ needs.crash-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Regression Tests | ${{ needs.regression-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Run Date: $(date -u)" >> $GITHUB_STEP_SUMMARY

@@ -13,6 +13,8 @@ default = []
 io_uring = ["dep:io-uring"]
 # Skip data checksums for maximum performance (trust filesystem for integrity)
 no_checksum = []
+# Enable failpoint injection for crash safety testing
+failpoint = []
 
 [dependencies]
 libc = "0.2.178"
@@ -22,3 +24,7 @@ rayon = "1.11"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 io-uring = { version = "0.7", optional = true }
+
+[dev-dependencies]
+tempfile = "3.15"
+rand = "0.8"

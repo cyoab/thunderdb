@@ -2,6 +2,8 @@
 //! Copyright (c) YOAB. All rights reserved.
 
 pub mod aligned;
+#[cfg(feature = "failpoint")]
+pub mod failpoint;
 pub mod arena;
 pub mod bloom;
 pub mod btree;
@@ -54,3 +56,9 @@ pub use wal_record::{RECORD_HEADER_SIZE, WalRecord};
 
 #[cfg(all(target_os = "linux", feature = "io_uring"))]
 pub use uring::UringBackend;
+
+#[cfg(feature = "failpoint")]
+pub use failpoint::{
+    FailAction, FailpointBuilder, FailpointGuard, FailpointRegistry, FailpointScopeGuard,
+    RandomFailpointSelector,
+};
