@@ -28,9 +28,10 @@ use std::sync::{Mutex, OnceLock};
 static REGISTRY: OnceLock<FailpointRegistry> = OnceLock::new();
 
 /// Actions that can be triggered when a failpoint is hit.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum FailAction {
     /// Do nothing (failpoint disabled).
+    #[default]
     None,
     /// Panic immediately (simulates crash).
     Panic,
@@ -48,12 +49,6 @@ pub enum FailAction {
     PanicWithProbability(u8),
     /// Exit process immediately (true kill -9 simulation).
     Exit(i32),
-}
-
-impl Default for FailAction {
-    fn default() -> Self {
-        FailAction::None
-    }
 }
 
 /// Configuration for a single failpoint.
@@ -140,10 +135,10 @@ impl Failpoint {
             FailAction::Panic => {
                 panic!("Failpoint '{}' triggered panic (hit #{})", self.name, count);
             }
-            FailAction::IoError => Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failpoint '{}' triggered I/O error", self.name),
-            )),
+            FailAction::IoError => Err(std::io::Error::other(format!(
+                "Failpoint '{}' triggered I/O error",
+                self.name
+            ))),
             FailAction::Sleep(duration) => {
                 std::thread::sleep(duration);
                 Ok(true)
@@ -165,10 +160,10 @@ impl Failpoint {
             }
             FailAction::ErrorAfterN(n) => {
                 if count >= n {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        format!("Failpoint '{}' triggered error after {} hits", self.name, n),
-                    ));
+                    return Err(std::io::Error::other(format!(
+                        "Failpoint '{}' triggered error after {} hits",
+                        self.name, n
+                    )));
                 }
                 Ok(true)
             }
@@ -188,7 +183,10 @@ impl Failpoint {
             }
             FailAction::Exit(code) => {
                 // Flush stderr to ensure any error messages are written
-                eprintln!("Failpoint '{}' triggering process exit({})", self.name, code);
+                eprintln!(
+                    "Failpoint '{}' triggering process exit({})",
+                    self.name, code
+                );
                 std::process::exit(code);
             }
         }
@@ -216,9 +214,7 @@ impl FailpointRegistry {
     /// Registers a failpoint with a specific action.
     pub fn register(&self, name: &'static str, action: FailAction) {
         let mut fps = self.failpoints.lock().unwrap();
-        let fp = fps
-            .entry(name)
-            .or_insert_with(|| Failpoint::new(name));
+        let fp = fps.entry(name).or_insert_with(|| Failpoint::new(name));
         fp.set_action(action);
     }
 
@@ -229,9 +225,7 @@ impl FailpointRegistry {
         callback: F,
     ) {
         let mut fps = self.failpoints.lock().unwrap();
-        let fp = fps
-            .entry(name)
-            .or_insert_with(|| Failpoint::new(name));
+        let fp = fps.entry(name).or_insert_with(|| Failpoint::new(name));
         fp.set_action(FailAction::Callback);
         fp.set_callback(callback);
     }
@@ -464,7 +458,8 @@ impl FailpointBuilder {
 
     /// Adds a probabilistic panic failpoint.
     pub fn panic_with_probability(mut self, name: &'static str, pct: u8) -> Self {
-        self.configs.push((name, FailAction::PanicWithProbability(pct)));
+        self.configs
+            .push((name, FailAction::PanicWithProbability(pct)));
         self
     }
 
@@ -577,7 +572,7 @@ mod tests {
     fn test_failpoint_disabled_by_default() {
         let fp = Failpoint::new("test");
         assert!(!fp.is_enabled());
-        assert!(fp.trigger().unwrap() == false);
+        assert!(!fp.trigger().unwrap());
     }
 
     #[test]
@@ -621,8 +616,8 @@ mod tests {
 
     #[test]
     fn test_failpoint_callback() {
-        use std::sync::atomic::AtomicBool;
         use std::sync::Arc;
+        use std::sync::atomic::AtomicBool;
 
         let called = Arc::new(AtomicBool::new(false));
         let called_clone = called.clone();

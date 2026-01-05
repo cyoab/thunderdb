@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_heap_storage() {
-        let large = IVec::from_slice(&vec![0u8; 100]);
+        let large = IVec::from_slice(&[0u8; 100]);
         assert!(!large.is_inline());
         assert_eq!(large.len(), 100);
     }
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_clone_heap() {
-        let original = IVec::from_slice(&vec![42u8; 100]);
+        let original = IVec::from_slice(&[42u8; 100]);
         let cloned = original.clone();
         assert_eq!(original, cloned);
         // Both should point to the same Arc
@@ -320,11 +320,11 @@ mod tests {
     #[test]
     fn test_boundary_cases() {
         // Exactly at inline capacity
-        let at_capacity = IVec::from_slice(&vec![0u8; INLINE_CAPACITY]);
+        let at_capacity = IVec::from_slice(&[0u8; INLINE_CAPACITY]);
         assert!(at_capacity.is_inline());
 
         // One byte over capacity
-        let over_capacity = IVec::from_slice(&vec![0u8; INLINE_CAPACITY + 1]);
+        let over_capacity = IVec::from_slice(&[0u8; INLINE_CAPACITY + 1]);
         assert!(!over_capacity.is_inline());
     }
 

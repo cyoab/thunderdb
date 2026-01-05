@@ -2,8 +2,6 @@
 //! Copyright (c) YOAB. All rights reserved.
 
 pub mod aligned;
-#[cfg(feature = "failpoint")]
-pub mod failpoint;
 pub mod arena;
 pub mod bloom;
 pub mod btree;
@@ -13,6 +11,8 @@ pub mod coalescer;
 pub mod concurrent;
 pub mod db;
 pub mod error;
+#[cfg(feature = "failpoint")]
+pub mod failpoint;
 pub mod freelist;
 pub mod group_commit;
 pub mod io_backend;
