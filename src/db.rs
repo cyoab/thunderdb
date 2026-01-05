@@ -159,7 +159,8 @@ pub struct Database {
     /// Current meta page (the one with higher txid).
     meta: Meta,
     /// In-memory B+ tree storing all key-value pairs.
-    tree: BTree,
+    /// Wrapped in Arc for O(1) snapshot creation via reference counting.
+    tree: std::sync::Arc<BTree>,
     /// Current write offset in the data section (for append-only writes).
     data_end_offset: u64,
     /// Number of entries currently persisted.
@@ -184,6 +185,12 @@ pub struct Database {
     wal: Option<Wal>,
     /// Checkpoint manager (if WAL enabled).
     checkpoint_manager: Option<CheckpointManager>,
+    // Phase 2: Snapshot management
+    /// Manages snapshot lifecycle and tracks active snapshots.
+    snapshot_manager: std::sync::Arc<crate::snapshot::SnapshotManager>,
+    /// Maps snapshot IDs to their tree states for explicit snapshot API.
+    explicit_snapshots:
+        std::collections::HashMap<crate::snapshot::SnapshotId, std::sync::Arc<BTree>>,
 }
 
 impl Database {
@@ -399,7 +406,7 @@ impl Database {
             path: path_buf,
             file,
             meta,
-            tree,
+            tree: std::sync::Arc::new(tree),
             data_end_offset,
             persisted_entry_count,
             #[cfg(unix)]
@@ -411,6 +418,8 @@ impl Database {
             overflow_refs,
             wal,
             checkpoint_manager,
+            snapshot_manager: std::sync::Arc::new(crate::snapshot::SnapshotManager::new()),
+            explicit_snapshots: std::collections::HashMap::new(),
         })
     }
 
@@ -1827,8 +1836,11 @@ impl Database {
     }
 
     /// Returns a mutable reference to the B+ tree.
+    ///
+    /// Uses copy-on-write semantics: if there are other references
+    /// (e.g., from snapshots), the tree is cloned before mutation.
     pub(crate) fn tree_mut(&mut self) -> &mut BTree {
-        &mut self.tree
+        std::sync::Arc::make_mut(&mut self.tree)
     }
 
     /// Returns a reference to the bloom filter.
@@ -2042,5 +2054,135 @@ impl Database {
     #[allow(dead_code)]
     pub(crate) fn next_txid(&self) -> u64 {
         self.meta.txid + 1
+    }
+
+    // ==================== Phase 2: Snapshot Isolation Methods ====================
+
+    /// Creates a snapshot of the current database state.
+    ///
+    /// The returned `Snapshot` provides a consistent, immutable view of the
+    /// database as it was when the snapshot was created. Subsequent modifications
+    /// to the database are not visible to the snapshot.
+    ///
+    /// # Performance
+    ///
+    /// Snapshot creation is O(n) where n is the number of keys, because
+    /// it clones the B+ tree. For very large databases, consider using
+    /// `read_tx()` for short-lived reads instead.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let snapshot = db.snapshot();
+    ///
+    /// // Modifications are not visible to the snapshot
+    /// {
+    ///     let mut wtx = db.write_tx();
+    ///     wtx.put(b"key", b"new_value");
+    ///     wtx.commit().unwrap();
+    /// }
+    ///
+    /// // Snapshot still sees the old state
+    /// assert!(snapshot.get(b"key").is_none());
+    /// ```
+    pub fn snapshot(&self) -> crate::snapshot::Snapshot {
+        // O(1) snapshot creation: just clone the Arc reference
+        crate::snapshot::Snapshot::with_arc(
+            std::sync::Arc::clone(&self.tree),
+            Some(std::sync::Arc::clone(&self.snapshot_manager)),
+        )
+    }
+
+    /// Creates an explicit, managed snapshot with a unique ID.
+    ///
+    /// Unlike `snapshot()`, this creates a snapshot that can be retrieved
+    /// later by ID and must be explicitly released.
+    ///
+    /// # Returns
+    ///
+    /// A unique snapshot ID that can be used with `get_snapshot()` and
+    /// `release_snapshot()`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let snapshot_id = db.create_snapshot();
+    ///
+    /// // Later, retrieve the snapshot
+    /// if let Some(snapshot) = db.get_snapshot(snapshot_id) {
+    ///     // Use the snapshot
+    /// }
+    ///
+    /// // Release when done
+    /// db.release_snapshot(snapshot_id);
+    /// ```
+    pub fn create_snapshot(&mut self) -> crate::snapshot::SnapshotId {
+        use std::sync::Arc;
+
+        let id = {
+            // Generate a unique ID
+            static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        };
+
+        // O(1) snapshot: clone the Arc reference, not the tree content
+        let tree_clone = Arc::clone(&self.tree);
+        self.explicit_snapshots.insert(id, tree_clone);
+        self.snapshot_manager.register_snapshot(id);
+
+        id
+    }
+
+    /// Retrieves a previously created snapshot by ID.
+    ///
+    /// Returns `None` if the snapshot ID is invalid or the snapshot
+    /// has been released.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let snapshot_id = db.create_snapshot();
+    /// let snapshot = db.get_snapshot(snapshot_id).expect("snapshot exists");
+    /// let value = snapshot.get(b"key");
+    /// ```
+    pub fn get_snapshot(
+        &self,
+        id: crate::snapshot::SnapshotId,
+    ) -> Option<crate::snapshot::Snapshot> {
+        self.explicit_snapshots.get(&id).map(|tree| {
+            crate::snapshot::Snapshot::with_arc(
+                std::sync::Arc::clone(tree),
+                Some(std::sync::Arc::clone(&self.snapshot_manager)),
+            )
+        })
+    }
+
+    /// Releases an explicit snapshot, freeing its resources.
+    ///
+    /// After this call, `get_snapshot()` will return `None` for this ID.
+    ///
+    /// # Note
+    ///
+    /// Releasing a snapshot allows pages to be reclaimed. Long-lived
+    /// snapshots may prevent memory reclamation.
+    pub fn release_snapshot(&mut self, id: crate::snapshot::SnapshotId) {
+        self.explicit_snapshots.remove(&id);
+        self.snapshot_manager.unregister_snapshot(id);
+    }
+
+    /// Returns statistics about active snapshots.
+    ///
+    /// Useful for monitoring snapshot usage and detecting potential
+    /// memory issues from long-lived snapshots.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let stats = db.snapshot_stats();
+    /// println!("Active snapshots: {}", stats.active_snapshots);
+    /// println!("Oldest snapshot age: {}ms", stats.oldest_snapshot_age_ms);
+    /// ```
+    pub fn snapshot_stats(&self) -> crate::snapshot::SnapshotStats {
+        self.snapshot_manager.stats()
     }
 }

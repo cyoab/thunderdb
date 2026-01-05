@@ -7,6 +7,8 @@ use crate::btree::{BTree, BTreeIter, BTreeRangeIter, Bound};
 use crate::bucket::{self, BucketRef, NestedBucketRef, bucket_exists, list_buckets};
 use crate::db::Database;
 use crate::error::{Error, Result};
+use crate::iter::{IterOptions, MetricsIter, PrefetchIter};
+use crate::value::{BorrowedValue, OwnedValue};
 
 /// A read-only transaction.
 ///
@@ -73,6 +75,56 @@ impl<'db> ReadTx<'db> {
         self.db.tree().get(key)
     }
 
+    /// Retrieves a borrowed value with explicit lifetime marker.
+    ///
+    /// Returns `None` if the key does not exist.
+    ///
+    /// # Zero-Copy
+    ///
+    /// This method returns a `BorrowedValue<'_>` type that explicitly
+    /// indicates the value is borrowed and cannot outlive the transaction.
+    /// This provides compile-time safety guarantees.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let rtx = db.read_tx();
+    /// let borrowed: Option<BorrowedValue<'_>> = rtx.get_borrowed(b"key");
+    /// // borrowed cannot outlive rtx
+    /// ```
+    #[inline]
+    pub fn get_borrowed(&self, key: &[u8]) -> Option<BorrowedValue<'_>> {
+        self.get_ref(key).map(BorrowedValue::new)
+    }
+
+    /// Retrieves an owned copy of the value that can outlive the transaction.
+    ///
+    /// Returns `None` if the key does not exist.
+    ///
+    /// # Allocation
+    ///
+    /// This method allocates a new `OwnedValue` containing a copy of the data.
+    /// Use `get_ref()` or `get_borrowed()` to avoid allocation when possible.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let owned: Option<OwnedValue>;
+    /// {
+    ///     let rtx = db.read_tx();
+    ///     owned = rtx.get_owned(b"key");
+    /// } // Transaction dropped
+    ///
+    /// // owned is still valid
+    /// if let Some(val) = owned {
+    ///     println!("value: {:?}", val.as_ref());
+    /// }
+    /// ```
+    #[inline]
+    pub fn get_owned(&self, key: &[u8]) -> Option<OwnedValue> {
+        self.get_ref(key).map(OwnedValue::from_slice)
+    }
+
     /// Returns a read-only reference to a bucket.
     ///
     /// # Errors
@@ -98,6 +150,45 @@ impl<'db> ReadTx<'db> {
     /// Keys are returned in sorted (lexicographic) order.
     pub fn iter(&self) -> BTreeIter<'_> {
         self.db.tree().iter()
+    }
+
+    /// Returns an iterator with custom options for optimized scanning.
+    ///
+    /// Use this when you need control over prefetching behavior or
+    /// want to collect scan metrics.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let options = IterOptions::default()
+    ///     .prefetch_count(32);
+    /// let iter = rtx.iter_with_options(options);
+    /// for (key, value) in iter {
+    ///     // Process entries with prefetching
+    /// }
+    /// ```
+    pub fn iter_with_options(&self, options: IterOptions) -> PrefetchIter<'_, BTreeIter<'_>> {
+        PrefetchIter::new(self.db.tree().iter(), options.prefetch_count)
+    }
+
+    /// Returns an iterator that collects scan metrics.
+    ///
+    /// Use this for monitoring and performance analysis.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut iter = rtx.iter_with_metrics();
+    /// for (key, value) in iter.by_ref() {
+    ///     // Process entries
+    /// }
+    /// let metrics = iter.metrics();
+    /// println!("Scanned {} keys in {:?}",
+    ///     metrics.keys_scanned,
+    ///     std::time::Duration::from_nanos(metrics.scan_duration_ns));
+    /// ```
+    pub fn iter_with_metrics(&self) -> MetricsIter<BTreeIter<'_>> {
+        MetricsIter::new(self.db.tree().iter())
     }
 
     /// Returns an iterator over a range of key-value pairs.

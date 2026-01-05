@@ -177,6 +177,7 @@ cargo fmt --check
 ```
 
 The test suite includes crash safety tests with failpoint injection at:
+
 - Before/after data writes
 - Before/after meta page writes  
 - Before/after fsync
